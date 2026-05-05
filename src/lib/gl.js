@@ -110,6 +110,34 @@ export const SUBTYPE_LABELS = {
   "fixed-expense":         "Fixed Charges",
 };
 
+/* ---------- Approval workflow ---------- */
+
+/**
+ * Default threshold above which a manual journal entry must be explicitly
+ * approved by a manager before it counts in the trial balance / financials.
+ * Auto-derived journals (from reports / invoices / payroll) bypass approval —
+ * they are evidence of an event that already happened.
+ */
+export const DEFAULT_APPROVAL_THRESHOLD = 5000;
+
+export function requiresApproval(entry, threshold = DEFAULT_APPROVAL_THRESHOLD) {
+  if (!entry) return false;
+  if (entry.source && entry.source.startsWith("auto-")) return false;
+  const t = entryTotals(entry);
+  return t.debit >= threshold;
+}
+
+/**
+ * "Effective" posted: a JE is included in the books only if it's posted AND
+ * (doesn't require approval OR has been approved).
+ */
+export function isEffective(entry, threshold = DEFAULT_APPROVAL_THRESHOLD) {
+  if (!entry || !entry.posted || entry.void) return false;
+  if (entry.approvalState === "rejected") return false;
+  if (requiresApproval(entry, threshold) && entry.approvalState !== "approved") return false;
+  return true;
+}
+
 /* ---------- Period close immutability ---------- */
 
 /**
@@ -120,6 +148,178 @@ export function isJournalLocked(journalEntry, closedPeriods) {
   if (!journalEntry?.date) return false;
   const month = String(journalEntry.date).slice(0, 7);
   return (closedPeriods || []).some(c => c.month === month && (!journalEntry.propertyId || !c.propertyId || c.propertyId === journalEntry.propertyId));
+}
+
+/* ---------- Period close wizard ---------- */
+
+/**
+ * Run a complete pre-close checklist for a property × month. Each entry
+ * has { id, label, status: 'pass'|'fail'|'warn', detail }.
+ */
+export function closePeriodChecks(state, propertyId, month, opts = {}) {
+  const checks = [];
+  const ledger = buildLedger(state, opts);
+  const monthStart = `${month}-01`;
+  const [yy, mm] = month.split("-").map(Number);
+  const lastDay = new Date(yy, mm, 0);
+  const monthEnd = lastDay.toISOString().slice(0, 10);
+  const propFilter = propertyId === "all" ? null : propertyId;
+
+  // 1. Trial balance balanced
+  const tb = trialBalance(ledger, monthEnd, propFilter, opts.chart);
+  checks.push({
+    id: "tb",
+    label: "Trial balance is in balance",
+    status: tb.totals.balanced ? "pass" : "fail",
+    detail: tb.totals.balanced
+      ? `Debits ${formatMoney(tb.totals.debit)} = credits ${formatMoney(tb.totals.credit)}`
+      : `Debits ${formatMoney(tb.totals.debit)} vs credits ${formatMoney(tb.totals.credit)} — off by ${formatMoney(Math.abs(tb.totals.diff))}`,
+  });
+
+  // 2. No draft / unposted manual JEs in this month
+  const draftCount = (state.journalEntries || []).filter((e) =>
+    e.date >= monthStart && e.date <= monthEnd
+    && (!propFilter || e.propertyId === propFilter)
+    && e.source === "manual"
+    && !e.posted
+  ).length;
+  checks.push({
+    id: "drafts",
+    label: "No draft journal entries in period",
+    status: draftCount === 0 ? "pass" : "fail",
+    detail: draftCount === 0 ? "All journal entries are posted." : `${draftCount} draft entr${draftCount === 1 ? "y" : "ies"} need to be posted or deleted.`,
+  });
+
+  // 3. No pending-approval JEs
+  const pendingCount = (state.journalEntries || []).filter((e) =>
+    e.date >= monthStart && e.date <= monthEnd
+    && (!propFilter || e.propertyId === propFilter)
+    && e.posted && !e.void
+    && requiresApproval(e, opts.approvalThreshold)
+    && e.approvalState !== "approved"
+    && e.approvalState !== "rejected"
+  ).length;
+  checks.push({
+    id: "approvals",
+    label: "All large entries are approved",
+    status: pendingCount === 0 ? "pass" : "fail",
+    detail: pendingCount === 0 ? "No entries waiting on approval." : `${pendingCount} entr${pendingCount === 1 ? "y" : "ies"} awaiting manager approval.`,
+  });
+
+  // 4. Daily reports posted for every business day in the month
+  const expectedDays = lastDay.getDate();
+  const postedDays = new Set(
+    (state.reports || [])
+      .filter(r => r.date >= monthStart && r.date <= monthEnd && (!propFilter || r.propertyId === propFilter))
+      .map(r => r.date)
+  );
+  const todayIso = new Date().toISOString().slice(0, 10);
+  // Only count days up to today if month is in progress
+  const cap = monthEnd > todayIso ? todayIso : monthEnd;
+  let businessDays = 0;
+  for (let d = 1; d <= lastDay.getDate(); d++) {
+    const ds = `${month}-${String(d).padStart(2, "0")}`;
+    if (ds <= cap) businessDays++;
+  }
+  const missingDays = Math.max(0, businessDays - postedDays.size);
+  checks.push({
+    id: "reports",
+    label: "Every business day has a posted flash report",
+    status: missingDays === 0 ? "pass" : missingDays <= 2 ? "warn" : "fail",
+    detail: missingDays === 0 ? `${postedDays.size} of ${expectedDays} days posted.` : `${missingDays} day${missingDays === 1 ? "" : "s"} missing a flash report.`,
+  });
+
+  // 5. Bank accounts reconciled through month end
+  const banks = bankAccounts(opts.chart || DEFAULT_CHART);
+  const recsThisMonth = (state.bankRecs || []).filter(r => (r.asOfDate || "").slice(0, 7) >= month);
+  const unrecBanks = banks.filter(b => !recsThisMonth.some(r => r.bankAccountCode === b.code));
+  checks.push({
+    id: "bankrec",
+    label: "All bank accounts reconciled through month-end",
+    status: unrecBanks.length === 0 ? "pass" : unrecBanks.length === banks.length ? "fail" : "warn",
+    detail: unrecBanks.length === 0
+      ? `${banks.length} bank account${banks.length === 1 ? "" : "s"} reconciled.`
+      : `${unrecBanks.length} bank account${unrecBanks.length === 1 ? "" : "s"} not yet reconciled: ${unrecBanks.map(b => b.code).join(", ")}.`,
+  });
+
+  // 6. All A/P invoices in the month are approved (no pending-approval bills)
+  const pendingApInvoices = (state.invoices || []).filter(i =>
+    i.issuedDate >= monthStart && i.issuedDate <= monthEnd
+    && (!propFilter || i.propertyId === propFilter)
+    && i.approvalState === "pending"
+  ).length;
+  checks.push({
+    id: "ap-pending",
+    label: "All A/P invoices are approved",
+    status: pendingApInvoices === 0 ? "pass" : "warn",
+    detail: pendingApInvoices === 0 ? "No A/P approvals outstanding." : `${pendingApInvoices} invoice${pendingApInvoices === 1 ? "" : "s"} awaiting approval.`,
+  });
+
+  // 7. Already closed?
+  const alreadyClosed = (state.closedPeriods || []).some(c => c.month === month && (!propFilter || c.propertyId === propFilter));
+  if (alreadyClosed) {
+    checks.push({
+      id: "already-closed",
+      label: "Period is already closed",
+      status: "warn",
+      detail: "Re-opening will allow edits to all journals dated in this month.",
+    });
+  }
+
+  const overall = checks.every(c => c.status === "pass") ? "pass"
+    : checks.some(c => c.status === "fail") ? "fail" : "warn";
+
+  return { checks, overall, period: { month, propertyId, monthStart, monthEnd } };
+}
+
+function formatMoney(n) {
+  return `$${(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/**
+ * For each manual JE in the period that's flagged `reversing: true`, produce
+ * a mirror JE on the first day of the next month with debits and credits swapped.
+ * This is the standard way to handle accruals (rent, payroll cutoff, etc.).
+ */
+export function reversingEntriesFor(state, propertyId, month, currentUserId) {
+  const monthStart = `${month}-01`;
+  const [yy, mm] = month.split("-").map(Number);
+  const lastDay = new Date(yy, mm, 0);
+  const nextDay = new Date(yy, mm, 1);
+  const nextDayIso = nextDay.toISOString().slice(0, 10);
+  const monthEnd = lastDay.toISOString().slice(0, 10);
+
+  return (state.journalEntries || [])
+    .filter(j =>
+      !j.void
+      && j.posted
+      && j.reversing
+      && j.source === "manual"
+      && j.date >= monthStart && j.date <= monthEnd
+      && (!propertyId || j.propertyId === propertyId)
+      && !j.reversedBy   // don't double-reverse
+    )
+    .map((src) => ({
+      id: `rev-${src.id}`,
+      tenantId: src.tenantId,
+      date: nextDayIso,
+      propertyId: src.propertyId,
+      description: `Reversal · ${src.description}`,
+      source: "manual",
+      sourceId: null,
+      posted: true,
+      void: false,
+      reversingOf: src.id,
+      lines: (src.lines || []).map(l => ({
+        accountCode: l.accountCode,
+        debit: l.credit || 0,
+        credit: l.debit || 0,
+        memo: l.memo ? `Reversal · ${l.memo}` : "Reversal",
+      })),
+      createdAt: new Date().toISOString(),
+      createdBy: currentUserId,
+      approvalState: "approved",
+    }));
 }
 
 /* ---------- Tenancy scaffolding ---------- */
@@ -352,11 +552,14 @@ export function contractorPaymentToJournal(p, contractor) {
  * @param {object} state
  * @returns {Array} ledger entries with .lines containing {accountCode, debit, credit, memo}
  */
-export function buildLedger(state) {
+export function buildLedger(state, opts = {}) {
+  const threshold = opts.approvalThreshold ?? state?.settings?.approvalThreshold ?? DEFAULT_APPROVAL_THRESHOLD;
+  const includePending = !!opts.includePending;
   const out = [];
   const persistedSourceIds = new Set();
   (state.journalEntries || []).forEach((j) => {
     if (j.void) return;
+    if (!includePending && !isEffective(j, threshold)) return;
     out.push({ ...j, source: j.source || "manual" });
     if (j.sourceId) persistedSourceIds.add(`${j.source}::${j.sourceId}`);
   });

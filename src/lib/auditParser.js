@@ -432,12 +432,18 @@ export async function extractAudit({ text, file, properties }) {
   }
   const local = parseAuditText(inputText, properties);
 
-  // Try to enrich via Claude API if a key exists (optional)
+  // Try to enrich via Claude — prefer the server-side proxy if configured.
+  // Falls back to direct (legacy) only if no proxy is set.
+  const proxyUrl =
+    (typeof window !== "undefined" && (window.__HOTELOPS_PROXY_URL__ || localStorage.getItem("hotelops:proxyUrl"))) || null;
+  const proxyAuth =
+    (typeof window !== "undefined" && localStorage.getItem("hotelops:proxyAuth")) || null;
   const apiKey =
     (typeof window !== "undefined" && (window.__HOTELOPS_API_KEY__ || localStorage.getItem("hotelops:apiKey"))) || null;
-  if (apiKey && (inputText || file)) {
+
+  if ((proxyUrl || apiKey) && (inputText || file)) {
     try {
-      const ai = await callClaude({ apiKey, text: inputText, file, properties });
+      const ai = await callClaude({ proxyUrl, proxyAuth, apiKey, text: inputText, file, properties });
       return mergeExtractions(local, ai);
     } catch (e) {
       local.warnings.push(`AI enrichment skipped: ${e.message}`);
@@ -475,7 +481,7 @@ function mergeExtractions(local, ai) {
   return merged;
 }
 
-async function callClaude({ apiKey, text, file, properties }) {
+async function callClaude({ proxyUrl, proxyAuth, apiKey, text, file, properties }) {
   const propList = properties.map((p) => `  - "${p.name}" (id ${p.id}, ${p.rooms} rooms, ${p.location})`).join("\n");
   const prompt = `Extract a hotel night-audit / daily flash report into structured JSON.\n\nProperties:\n${propList}\n\nReturn ONLY a JSON object with shape:\n{ date, propertyId, rooms:{available,outOfOrder,sold,comp,transient,group,walkIns,noShows}, revenue:{rooms,fb:{restaurant,bar,banquet},other:{telephone,parking,spa,misc}}, taxes:{occupancy,sales,tourism}, payments:{cash,creditCard,directBill,other}, confidence, warnings:[], insights:[] }`;
   let content;
@@ -488,14 +494,25 @@ async function callClaude({ apiKey, text, file, properties }) {
   } else {
     content = `${prompt}\n\nAUDIT INPUT:\n${text}`;
   }
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+
+  // Decide endpoint: proxy preferred (key never ships to client); direct as legacy fallback.
+  const useProxy = !!proxyUrl;
+  const endpoint = useProxy
+    ? (proxyUrl.endsWith("/messages") ? proxyUrl : `${proxyUrl.replace(/\/$/, "")}/messages`)
+    : "https://api.anthropic.com/v1/messages";
+
+  const headers = { "Content-Type": "application/json" };
+  if (useProxy) {
+    if (proxyAuth) headers["X-HotelOps-Auth"] = proxyAuth;
+  } else {
+    headers["x-api-key"] = apiKey;
+    headers["anthropic-version"] = "2023-06-01";
+    headers["anthropic-dangerous-direct-browser-access"] = "true";
+  }
+
+  const res = await fetch(endpoint, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
+    headers,
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
       max_tokens: 2000,

@@ -1,0 +1,11 @@
+name = "hotelops-anthropic-proxy"
+main = "anthropic-proxy.js"
+compatibility_date = "2025-01-01"
+
+# Set these as secrets after `wrangler login`:
+#   wrangler secret put ANTHROPIC_API_KEY
+#   wrangler secret put PROXY_AUTH_TOKEN     # optional but strongly recommended
+#
+# Plain (non-secret) vars can go here:
+[vars]
+ALLOWED_ORIGINS = "*"

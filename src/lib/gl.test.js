@@ -24,6 +24,11 @@ import {
   backfillJournalEntries,
   makeReportJournal,
   makeInvoiceJournals,
+  requiresApproval,
+  isEffective,
+  closePeriodChecks,
+  reversingEntriesFor,
+  DEFAULT_APPROVAL_THRESHOLD,
 } from "./gl.js";
 
 const sampleReport = {
@@ -256,6 +261,86 @@ describe("period-close immutability", () => {
   it("allows edits in same month for a different property", () => {
     const e = { date: "2026-04-15", propertyId: "p2" };
     expect(isJournalLocked(e, [{ propertyId: "p1", month: "2026-04" }])).toBe(false);
+  });
+});
+
+describe("approval workflow", () => {
+  const big = {
+    id: "je_big", date: "2026-05-10", propertyId: "p1", source: "manual", posted: true,
+    lines: [{ accountCode: "5010", debit: 10000, credit: 0 }, { accountCode: "1020", debit: 0, credit: 10000 }],
+  };
+  const small = {
+    id: "je_small", date: "2026-05-10", propertyId: "p1", source: "manual", posted: true,
+    lines: [{ accountCode: "5010", debit: 100, credit: 0 }, { accountCode: "1020", debit: 0, credit: 100 }],
+  };
+
+  it("flags large manual JEs as needing approval", () => {
+    expect(requiresApproval(big)).toBe(true);
+    expect(requiresApproval(small)).toBe(false);
+  });
+
+  it("auto-derived journals never require approval, regardless of size", () => {
+    const auto = { ...big, source: "auto-from-payroll" };
+    expect(requiresApproval(auto)).toBe(false);
+  });
+
+  it("isEffective gates pending large entries out of the books", () => {
+    expect(isEffective(big)).toBe(false);                        // pending by default
+    expect(isEffective({ ...big, approvalState: "approved" })).toBe(true);
+    expect(isEffective({ ...big, approvalState: "rejected" })).toBe(false);
+    expect(isEffective(small)).toBe(true);                       // small posts immediately
+  });
+
+  it("buildLedger excludes pending JEs from the ledger", () => {
+    const state = { reports: [], invoices: [], payrollRuns: [], contractorPayments: [], journalEntries: [big, small] };
+    const ledger = buildLedger(state);
+    expect(ledger.find(e => e.id === "je_big")).toBeUndefined();
+    expect(ledger.find(e => e.id === "je_small")).toBeTruthy();
+  });
+
+  it("buildLedger with includePending: true returns everything for review UIs", () => {
+    const state = { reports: [], invoices: [], payrollRuns: [], contractorPayments: [], journalEntries: [big, small] };
+    const ledger = buildLedger(state, { includePending: true });
+    expect(ledger.find(e => e.id === "je_big")).toBeTruthy();
+  });
+});
+
+describe("period close wizard", () => {
+  it("returns pass overall when books balance + nothing pending", () => {
+    const persisted = makeReportJournal({ ...sampleReport, date: "2026-05-15" });
+    const state = {
+      reports: [{ ...sampleReport, date: "2026-05-15" }],
+      invoices: [], payrollRuns: [], contractorPayments: [],
+      journalEntries: persisted, bankRecs: [], closedPeriods: [],
+    };
+    const out = closePeriodChecks(state, "p1", "2026-05");
+    expect(out.checks.find(c => c.id === "tb").status).toBe("pass");
+    expect(out.checks.find(c => c.id === "drafts").status).toBe("pass");
+    expect(out.checks.find(c => c.id === "approvals").status).toBe("pass");
+  });
+
+  it("flags draft journal entries as failing", () => {
+    const draft = { id: "je_d", date: "2026-05-10", propertyId: "p1", source: "manual", posted: false,
+      lines: [{ accountCode: "5010", debit: 50, credit: 0 }, { accountCode: "1020", debit: 0, credit: 50 }] };
+    const state = { reports: [], invoices: [], payrollRuns: [], contractorPayments: [], journalEntries: [draft], bankRecs: [], closedPeriods: [] };
+    const out = closePeriodChecks(state, "p1", "2026-05");
+    expect(out.checks.find(c => c.id === "drafts").status).toBe("fail");
+  });
+
+  it("creates reversing entries with debits and credits swapped on day 1 of next period", () => {
+    const accrual = {
+      id: "je_acc", date: "2026-05-31", propertyId: "p1", source: "manual", posted: true,
+      reversing: true,
+      lines: [{ accountCode: "5010", debit: 1000, credit: 0 }, { accountCode: "2020", debit: 0, credit: 1000 }],
+    };
+    const state = { journalEntries: [accrual] };
+    const reversals = reversingEntriesFor(state, "p1", "2026-05", "u1");
+    expect(reversals).toHaveLength(1);
+    const r = reversals[0];
+    expect(r.date).toBe("2026-06-01");
+    expect(r.lines[0]).toEqual(expect.objectContaining({ accountCode: "5010", debit: 0, credit: 1000 }));
+    expect(r.lines[1]).toEqual(expect.objectContaining({ accountCode: "2020", debit: 1000, credit: 0 }));
+    expect(r.reversingOf).toBe("je_acc");
   });
 });
 

@@ -47,6 +47,11 @@ import {
   makeInvoiceJournals as _makeInvoiceJournals,
   makePayrollJournal as _makePayrollJournal,
   makeContractorJournal as _makeContractorJournal,
+  requiresApproval as _requiresApproval,
+  isEffective as _isEffective,
+  closePeriodChecks as _closePeriodChecks,
+  reversingEntriesFor as _reversingEntriesFor,
+  DEFAULT_APPROVAL_THRESHOLD as _DEFAULT_APPROVAL_THRESHOLD,
 } from "./src/lib/gl.js";
 import { ScheduleExportMenu as _ScheduleExportMenu } from "./src/lib/ScheduleExportMenu.jsx";
 import {
@@ -2039,6 +2044,9 @@ function Dashboard({ ctx }) {
       {/* Financial position — pulled live from the GL */}
       <FinancialPositionStrip ctx={ctx} />
 
+      {/* Books health — live close-readiness signals */}
+      <BooksHealthCard ctx={ctx} />
+
       {/* Labor & productivity */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <LaborTile label="Labor Cost % (7d)" value={`${(labor.ratio * 100).toFixed(1)}%`} ratio={labor.ratio} />
@@ -2415,6 +2423,124 @@ function LiveTicker({ propIds, state }) {
           <span className="text-stone-500 uppercase tracking-wider">Reports</span>{" "}
           <span className="font-display tabular text-white font-semibold">{state.reports.filter(r => propIds.includes(r.propertyId)).length}</span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function BooksHealthCard({ ctx }) {
+  const { state, perms, accessibleProperties, activeProperty, setView } = ctx;
+  const chart = useChart(state);
+  const ledger = useLedger(state);
+  const propId = perms.properties === "all" ? null : activeProperty;
+  const today = iso(TODAY);
+
+  // 1. Trial balance balanced?
+  const tb = useMemo(() => _trialBalance(ledger, today, propId, chart), [ledger, today, propId, chart]);
+
+  // 2. Bank rec freshness
+  const banks = _bankAccounts(chart);
+  const bankRecsByCode = {};
+  (state.bankRecs || []).forEach(r => {
+    if (!bankRecsByCode[r.bankAccountCode] || r.asOfDate > bankRecsByCode[r.bankAccountCode].asOfDate) {
+      bankRecsByCode[r.bankAccountCode] = r;
+    }
+  });
+  const stalestRecAge = banks.reduce((max, b) => {
+    const r = bankRecsByCode[b.code];
+    if (!r) return Infinity;
+    const days = Math.floor((TODAY - new Date(r.asOfDate)) / (24 * 3600 * 1000));
+    return Math.max(max, days);
+  }, 0);
+  const noRecsAtAll = banks.length > 0 && banks.every(b => !bankRecsByCode[b.code]);
+
+  // 3. Period close status — most recent closed period
+  const myClosed = (state.closedPeriods || []).filter(c => !propId || c.propertyId === propId);
+  const lastClosedMonth = myClosed.map(c => c.month).sort().pop();
+  const dt = TODAY;
+  const lastFinishedMonth = `${dt.getFullYear()}-${String(dt.getMonth()).padStart(2, "0")}`;
+  const isLastMonthClosed = lastClosedMonth >= lastFinishedMonth;
+
+  // 4. Drafts
+  const drafts = (state.journalEntries || []).filter(e => !e.posted && !e.void && e.source === "manual" && (!propId || e.propertyId === propId)).length;
+
+  // 5. Pending approvals
+  const pendingApprovals = (state.journalEntries || []).filter(e => !e.void && _requiresApproval(e) && e.approvalState !== "approved" && e.approvalState !== "rejected" && (!propId || e.propertyId === propId)).length;
+
+  const items = [
+    {
+      label: "Trial balance",
+      value: tb.totals.balanced ? "Balanced" : `Off by ${fmtMoneyShort(Math.abs(tb.totals.diff))}`,
+      tone: tb.totals.balanced ? "ok" : "fail",
+      hint: tb.totals.balanced ? "Books prove out" : "Open Trial Balance",
+      onClick: () => { setView("accounting"); _commandBus.emit("trial-balance:open"); },
+    },
+    {
+      label: "Bank reconciliation",
+      value: noRecsAtAll ? "No recs yet" : stalestRecAge === Infinity ? `${banks.length} unrec'd` : `${stalestRecAge}d`,
+      tone: noRecsAtAll || stalestRecAge === Infinity ? "warn" : stalestRecAge > 35 ? "warn" : "ok",
+      hint: stalestRecAge > 35 ? "Stalest rec > 35 days" : "Most recent rec age",
+      onClick: () => { setView("accounting"); _commandBus.emit("bankrec:open"); },
+    },
+    {
+      label: "Period close",
+      value: isLastMonthClosed ? `Closed thru ${lastClosedMonth}` : lastClosedMonth ? `Open · last closed ${lastClosedMonth}` : "No close yet",
+      tone: isLastMonthClosed ? "ok" : "warn",
+      hint: isLastMonthClosed ? "On schedule" : `${lastFinishedMonth} not yet closed`,
+      onClick: () => { setView("accounting"); _commandBus.emit("close:open"); },
+    },
+    {
+      label: "Draft journals",
+      value: drafts === 0 ? "None" : `${drafts} draft${drafts === 1 ? "" : "s"}`,
+      tone: drafts === 0 ? "ok" : "warn",
+      hint: drafts === 0 ? "Everything posted" : "Open Journal",
+      onClick: () => { setView("accounting"); _commandBus.emit("journal:open"); },
+    },
+    {
+      label: "Pending approvals",
+      value: pendingApprovals === 0 ? "None" : `${pendingApprovals} waiting`,
+      tone: pendingApprovals === 0 ? "ok" : "warn",
+      hint: pendingApprovals === 0 ? "Nothing to review" : "Review approvals",
+      onClick: () => { setView("accounting"); _commandBus.emit("journal:open"); },
+    },
+  ];
+
+  const Tile = ({ label, value, tone, hint, onClick }) => {
+    const colors = {
+      ok: { val: "text-emerald-700", dot: "bg-emerald-500" },
+      warn: { val: "text-amber-700", dot: "bg-amber-500" },
+      fail: { val: "text-rose-700", dot: "bg-rose-600" },
+    };
+    const c = colors[tone] || colors.ok;
+    return (
+      <Card className="p-4 cursor-pointer hover:shadow-md transition-shadow" onClick={onClick}>
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
+          <span className="text-xs uppercase tracking-wider text-stone-500 font-semibold">{label}</span>
+        </div>
+        <div className={`font-display text-lg font-semibold ${c.val}`}>{value}</div>
+        <div className="text-xs text-stone-500 mt-1">{hint}</div>
+      </Card>
+    );
+  };
+
+  const overallTone = items.every(i => i.tone === "ok") ? "ok" : items.some(i => i.tone === "fail") ? "fail" : "warn";
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-xs uppercase tracking-[0.2em] text-amber-700 font-bold">
+          Books Health · {overallTone === "ok" ? "Closing-ready ✓" : overallTone === "warn" ? "Action items" : "Issues"}
+        </h3>
+        <button
+          onClick={() => { setView("accounting"); _commandBus.emit("close:open"); }}
+          className="text-xs text-stone-500 hover:text-stone-900 font-medium"
+        >
+          Run Period Close →
+        </button>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        {items.map((it) => <Tile key={it.label} {...it} />)}
       </div>
     </div>
   );
@@ -4655,6 +4781,7 @@ function AccountingModule({ ctx }) {
       else if (cmd === "journal:open") setTab("journal");
       else if (cmd === "bankrec:open") setTab("bankrec");
       else if (cmd === "cashflow:open") setTab("cashflow");
+      else if (cmd === "close:open") setTab("close");
     });
     return off;
   }, []);
@@ -4673,6 +4800,7 @@ function AccountingModule({ ctx }) {
             { id: "trial-balance", label: "Trial Balance", icon: ClipboardList, badge: "GL" },
             { id: "journal", label: "Journal", icon: ClipboardList, badge: "GL" },
             { id: "bankrec", label: "Bank Rec", icon: FileCheck2, badge: "GL" },
+            { id: "close", label: "Period Close", icon: Shield, badge: "GL" },
             { id: "ar", label: "A/R Aging", icon: Receipt },
             { id: "ap", label: "A/P", icon: Receipt },
             { id: "tax", label: "Tax Calendar", icon: Calendar },
@@ -4712,6 +4840,7 @@ function AccountingModule({ ctx }) {
       {tab === "trial-balance" && <TrialBalancePane ctx={ctx} />}
       {tab === "journal" && <JournalEntriesPane ctx={ctx} />}
       {tab === "bankrec" && <BankRecPane ctx={ctx} />}
+      {tab === "close" && <PeriodClosePane ctx={ctx} setTab={setTab} />}
       {tab === "ap" && <ApPane ctx={ctx} />}
       {tab === "ar" && <ArAgingPane ctx={ctx} />}
       {tab === "tax" && <TaxCalendarPane ctx={ctx} />}
@@ -8169,7 +8298,7 @@ function ApPane({ ctx }) {
 }
 
 function InvoiceModal({ invoice, ctx, onSave, onClose }) {
-  const { state, accessibleProperties } = ctx;
+  const { state, accessibleProperties, currentUser } = ctx;
   const today = iso(TODAY);
   const [draft, setDraft] = useState(invoice || {
     vendorId: state.vendors[0]?.id || "",
@@ -8182,6 +8311,7 @@ function InvoiceModal({ invoice, ctx, onSave, onClose }) {
     glAccount: "5900",
     memo: "",
     approvalState: "pending",
+    attachments: [],
   });
   const handle = (k, v) => setDraft(d => ({ ...d, [k]: v }));
   const valid = draft.vendorId && draft.propertyId && draft.amount > 0 && draft.issuedDate && draft.dueDate;
@@ -8205,6 +8335,11 @@ function InvoiceModal({ invoice, ctx, onSave, onClose }) {
           <Input label="GL Account" value={draft.glAccount} onChange={v => handle("glAccount", v)} placeholder="e.g. 5210" />
         </div>
         <Textarea label="Memo / Notes" value={draft.memo} onChange={v => handle("memo", v)} rows={3} placeholder="Description of goods/services or reference" />
+        <AttachmentsPanel
+          attachments={draft.attachments || []}
+          onChange={(next) => handle("attachments", next)}
+          currentUser={currentUser}
+        />
         <div className="flex items-center justify-between pt-3 border-t border-stone-200">
           <span className="text-xs text-stone-500">Posting to GL · {fmtMoney(draft.amount)}</span>
           <div className="flex gap-2">
@@ -9919,7 +10054,8 @@ function useLedger(state) {
 function JournalEntriesPane({ ctx }) {
   const { state, update, currentUser, perms, accessibleProperties, activeProperty, toast } = ctx;
   const chart = useChart(state);
-  const ledger = useLedger(state);
+  // Include pending entries here so the reviewer can see them
+  const ledger = useMemo(() => _buildLedger(state, { includePending: true }), [state.reports, state.invoices, state.vendors, state.payrollRuns, state.contractors, state.contractorPayments, state.journalEntries]);
   const propIds = perms.properties === "all" ? accessibleProperties.map(p => p.id) : accessibleProperties.filter(p => p.id === activeProperty).map(p => p.id);
 
   const [editing, setEditing] = useState(null);   // entry being edited or null
@@ -9927,6 +10063,7 @@ function JournalEntriesPane({ ctx }) {
   const [propFilter, setPropFilter] = useState(activeProperty || "all");
   const [from, setFrom] = useState(iso(addDays(TODAY, -30)));
   const [to, setTo] = useState(iso(TODAY));
+  const [approvalFilter, setApprovalFilter] = useState("all"); // all | pending | approved | rejected
 
   const filtered = useMemo(() => {
     return ledger
@@ -9934,8 +10071,18 @@ function JournalEntriesPane({ ctx }) {
       .filter(e => showSourceFilter === "all" || e.source === showSourceFilter)
       .filter(e => propFilter === "all" || e.propertyId === propFilter)
       .filter(e => !e.propertyId || propIds.includes(e.propertyId))
+      .filter(e => {
+        if (approvalFilter === "all") return true;
+        if (approvalFilter === "pending") return _requiresApproval(e) && e.approvalState !== "approved" && e.approvalState !== "rejected";
+        return e.approvalState === approvalFilter;
+      })
       .sort((a, b) => b.date.localeCompare(a.date) || (b.id || "").localeCompare(a.id || ""));
-  }, [ledger, from, to, showSourceFilter, propFilter, propIds]);
+  }, [ledger, from, to, showSourceFilter, propFilter, propIds, approvalFilter]);
+
+  const pendingCount = useMemo(() =>
+    (state.journalEntries || []).filter(e => !e.void && _requiresApproval(e) && e.approvalState !== "approved" && e.approvalState !== "rejected").length,
+    [state.journalEntries]
+  );
 
   const totals = useMemo(() => {
     let dr = 0, cr = 0;
@@ -9956,12 +10103,18 @@ function JournalEntriesPane({ ctx }) {
       return;
     }
     const others = (state.journalEntries || []).filter(e => e.id !== draft.id);
+    const isManager = !!perms.canRunPayroll;  // managers / admins can self-approve
+    const needsApproval = _requiresApproval(draft);
     const next = _withTenant({
       ...draft,
       id: draft.id || newId("je"),
       posted: !!draft.posted,
       void: false,
       source: draft.source || "manual",
+      // If a large entry was created by a manager, auto-approve. Otherwise mark pending.
+      approvalState: !needsApproval ? "approved" : (isManager ? "approved" : "pending"),
+      approvedBy: !needsApproval ? null : (isManager ? currentUser.id : null),
+      approvedAt: !needsApproval ? null : (isManager ? new Date().toISOString() : null),
       createdAt: draft.createdAt || new Date().toISOString(),
       createdBy: draft.createdBy || currentUser.id,
       updatedAt: new Date().toISOString(),
@@ -9986,6 +10139,24 @@ function JournalEntriesPane({ ctx }) {
     update({ journalEntries: next });
     pushActivity(ctx, "journal.void", { id });
     toast?.push?.("Journal entry voided", { tone: "warn" });
+  };
+
+  const approveEntry = (id) => {
+    const next = (state.journalEntries || []).map(e =>
+      e.id === id ? { ...e, approvalState: "approved", approvedBy: currentUser.id, approvedAt: new Date().toISOString(), rejectedAt: null, rejectedBy: null, rejectReason: null } : e
+    );
+    update({ journalEntries: next });
+    pushActivity(ctx, "journal.approve", { id });
+    toast?.push?.("Journal entry approved", { tone: "success" });
+  };
+  const rejectEntry = (id) => {
+    const reason = window.prompt("Reason for rejecting?") || "";
+    const next = (state.journalEntries || []).map(e =>
+      e.id === id ? { ...e, approvalState: "rejected", rejectedBy: currentUser.id, rejectedAt: new Date().toISOString(), rejectReason: reason } : e
+    );
+    update({ journalEntries: next });
+    pushActivity(ctx, "journal.reject", { id, reason });
+    toast?.push?.("Journal entry rejected", { tone: "warn" });
   };
 
   const generateRecurring = () => {
@@ -10070,6 +10241,7 @@ function JournalEntriesPane({ ctx }) {
           entry={editing}
           chart={chart}
           properties={accessibleProperties}
+          currentUser={currentUser}
           onClose={() => setEditing(null)}
           onSave={saveEntry}
         />
@@ -10138,6 +10310,27 @@ function JournalEntriesPane({ ctx }) {
             </label>
           )}
         </div>
+        <div className="flex items-center gap-3 mt-3 flex-wrap">
+          <span className="text-[10px] uppercase tracking-wider text-stone-500 font-bold">Approval:</span>
+          {[
+            { id: "all", label: "All" },
+            { id: "pending", label: `Pending${pendingCount > 0 ? ` · ${pendingCount}` : ""}`, badge: pendingCount > 0 },
+            { id: "approved", label: "Approved" },
+            { id: "rejected", label: "Rejected" },
+          ].map(f => (
+            <button
+              key={f.id}
+              onClick={() => setApprovalFilter(f.id)}
+              className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                approvalFilter === f.id ? "bg-stone-900 text-white border-stone-900"
+                : f.badge ? "bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100"
+                : "bg-white text-stone-700 border-stone-300 hover:border-stone-400"
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
       </Card>
 
       <Card className="overflow-hidden">
@@ -10167,7 +10360,13 @@ function JournalEntriesPane({ ctx }) {
                       {locked && <Shield size={11} className="inline ml-1 text-stone-400" />}
                     </td>
                     <td className="px-4 py-2.5">
-                      <div className="text-stone-900 font-medium">{e.description}</div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-stone-900 font-medium">{e.description}</span>
+                        {e.reversing && <Badge color="violet">Reversing</Badge>}
+                        {e.recurring && <Badge color="sky">Recurring · {e.recurring}</Badge>}
+                        {_requiresApproval(e) && e.approvalState === "pending" && <Badge color="amber">Pending approval</Badge>}
+                        {e.approvalState === "rejected" && <Badge color="rose">Rejected</Badge>}
+                      </div>
                       <div className="text-[11px] text-stone-500 mt-0.5">
                         {(e.lines || []).map((l, i) => {
                           const acct = chart.find(a => a.code === l.accountCode);
@@ -10189,6 +10388,15 @@ function JournalEntriesPane({ ctx }) {
                     <td className="px-4 py-2.5 text-right">
                       {locked ? (
                         <span className="text-[10px] text-stone-400 uppercase tracking-wider" title="Period closed — locked">locked</span>
+                      ) : _requiresApproval(e) && e.approvalState !== "approved" && e.approvalState !== "rejected" ? (
+                        perms.canRunPayroll ? (
+                          <div className="inline-flex gap-1">
+                            <button onClick={() => approveEntry(e.id)} className="text-emerald-600 hover:text-emerald-800 p-1" title="Approve"><CheckCircle2 size={14} /></button>
+                            <button onClick={() => rejectEntry(e.id)} className="text-rose-600 hover:text-rose-800 p-1" title="Reject"><X size={14} /></button>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-amber-700 uppercase tracking-wider font-semibold">awaiting</span>
+                        )
                       ) : isManual ? (
                         <div className="inline-flex gap-1">
                           <button onClick={() => setEditing(e)} className="text-stone-500 hover:text-stone-900 p-1" title="Edit"><Edit2 size={13} /></button>
@@ -10219,6 +10427,90 @@ function JournalEntriesPane({ ctx }) {
   );
 }
 
+/* =========================================================================
+   ATTACHMENTS — invoices + journal entries can carry receipts/PDFs
+   ========================================================================= */
+function AttachmentsPanel({ attachments = [], onChange, currentUser, readOnly = false }) {
+  const fileRef = useRef(null);
+  const handleFile = async (file) => {
+    if (!file) return;
+    if (file.size > 6 * 1024 * 1024) {
+      alert("Files must be under 6 MB. Larger files will become a cloud-storage feature in a future release.");
+      return;
+    }
+    const dataUrl = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+    onChange?.([
+      ...attachments,
+      {
+        id: newId("att"),
+        filename: file.name,
+        mimeType: file.type || "application/octet-stream",
+        size: file.size,
+        dataUrl,
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: currentUser?.id || null,
+      },
+    ]);
+  };
+  const removeAt = (i) => onChange?.(attachments.filter((_, idx) => idx !== i));
+  const download = (a) => {
+    const link = document.createElement("a");
+    link.href = a.dataUrl;
+    link.download = a.filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+  const fmtSize = (n) => n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs uppercase tracking-wider text-stone-500 font-medium">
+          Attachments {attachments.length > 0 && <span className="text-stone-700">· {attachments.length}</span>}
+        </span>
+        {!readOnly && (
+          <>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.txt,.csv,.xlsx,.xls,.docx,.eml"
+              className="hidden"
+              onChange={e => { handleFile(e.target.files?.[0]); e.target.value = ""; }}
+            />
+            <button onClick={() => fileRef.current?.click()} className="text-xs text-amber-700 hover:text-amber-900 font-semibold inline-flex items-center gap-1">
+              <Paperclip size={12} /> Attach file
+            </button>
+          </>
+        )}
+      </div>
+      {attachments.length > 0 && (
+        <div className="space-y-1">
+          {attachments.map((a, i) => (
+            <div key={a.id || i} className="flex items-center gap-2 px-2 py-1.5 rounded border border-stone-200 bg-stone-50/40 text-xs">
+              <Paperclip size={11} className="text-stone-500 flex-shrink-0" />
+              <button onClick={() => download(a)} className="flex-1 text-left text-stone-900 hover:underline truncate" title={a.filename}>
+                {a.filename}
+              </button>
+              <span className="text-stone-500 tabular">{fmtSize(a.size)}</span>
+              {!readOnly && (
+                <button onClick={() => removeAt(i)} className="text-stone-400 hover:text-rose-600" title="Remove">
+                  <X size={11} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SourceBadge({ source }) {
   const map = {
     "manual": ["stone", "Manual"],
@@ -10233,7 +10525,7 @@ function SourceBadge({ source }) {
   return <Badge color={color}>{label}</Badge>;
 }
 
-function JournalEntryModal({ entry, chart, properties, onClose, onSave }) {
+function JournalEntryModal({ entry, chart, properties, onClose, onSave, currentUser }) {
   const [draft, setDraft] = useState(() => JSON.parse(JSON.stringify(entry)));
   const totals = _entryTotals(draft);
 
@@ -10349,11 +10641,21 @@ function JournalEntryModal({ entry, chart, properties, onClose, onSave }) {
           )}
         </div>
 
+        <AttachmentsPanel
+          attachments={draft.attachments || []}
+          onChange={(next) => setDraft({ ...draft, attachments: next })}
+          currentUser={currentUser}
+        />
+
         <div className="flex items-center justify-between pt-2 border-t border-stone-200 flex-wrap gap-3">
-          <div className="flex items-center gap-4 text-sm text-stone-700">
+          <div className="flex items-center gap-4 text-sm text-stone-700 flex-wrap">
             <label className="inline-flex items-center gap-2">
               <input type="checkbox" checked={!!draft.posted} onChange={e => setDraft({ ...draft, posted: e.target.checked })} className="rounded" />
               Post immediately
+            </label>
+            <label className="inline-flex items-center gap-2">
+              <input type="checkbox" checked={!!draft.reversing} onChange={e => setDraft({ ...draft, reversing: e.target.checked })} className="rounded" />
+              <span title="Auto-reverse this entry on day 1 of next period — used for month-end accruals">Reversing accrual</span>
             </label>
             <label className="inline-flex items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-stone-500 font-medium">Recurring</span>
@@ -10368,6 +10670,13 @@ function JournalEntryModal({ entry, chart, properties, onClose, onSave }) {
                 <option value="yearly">Every year</option>
               </select>
             </label>
+            {totals.debit >= _DEFAULT_APPROVAL_THRESHOLD && draft.source !== "manual" ? null : (
+              totals.debit >= _DEFAULT_APPROVAL_THRESHOLD && (
+                <span className="text-[10px] uppercase tracking-wider text-amber-700 font-bold inline-flex items-center gap-1">
+                  <Shield size={12} /> Will require manager approval ({fmtMoney(totals.debit)})
+                </span>
+              )
+            )}
           </div>
           <div className="flex gap-2">
             <Button variant="ghost" onClick={onClose}>Cancel</Button>
@@ -11104,6 +11413,181 @@ function BankRecPane({ ctx }) {
 }
 
 /* =========================================================================
+   PERIOD CLOSE WIZARD — pre-close checklist + finalize + reversing accruals
+   ========================================================================= */
+function PeriodClosePane({ ctx, setTab }) {
+  const { state, update, perms, accessibleProperties, activeProperty, currentUser, toast } = ctx;
+  const chart = useChart(state);
+  const today = TODAY;
+  const defaultMonth = `${today.getFullYear()}-${String(today.getMonth()).padStart(2, "0")}`; // last completed month
+  const [propId, setPropId] = useState(activeProperty || accessibleProperties[0]?.id || "all");
+  const [month, setMonth] = useState(defaultMonth);
+
+  const result = useMemo(
+    () => _closePeriodChecks(state, propId, month, { chart }),
+    [state, propId, month, chart]
+  );
+
+  const isAlreadyClosed = (state.closedPeriods || []).some(c => c.month === month && (!propId || c.propertyId === propId));
+  const canRunPayroll = perms.canRunPayroll;
+  const overall = result.overall;
+  const canClose = canRunPayroll && !isAlreadyClosed && (overall === "pass" || overall === "warn");
+
+  const closePeriod = (force = false) => {
+    if (!canClose && !force) return;
+    if (!canRunPayroll) { toast?.push?.("Only managers can close periods", { tone: "error" }); return; }
+    if (overall === "fail" && !force) {
+      if (!window.confirm(`Some checks failed. Close anyway?`)) return;
+    }
+    const reversals = _reversingEntriesFor(state, propId, month, currentUser.id);
+    const next = {
+      closedPeriods: [
+        ...(state.closedPeriods || []).filter(c => !(c.month === month && c.propertyId === propId)),
+        { month, propertyId: propId, closedAt: new Date().toISOString(), closedBy: currentUser.id, force: !!force },
+      ],
+    };
+    if (reversals.length) {
+      next.journalEntries = [...(state.journalEntries || []), ...reversals.map(_withTenant)];
+    }
+    update(next);
+    pushActivity(ctx, "period.close", { month, propertyId: propId, reversals: reversals.length });
+    toast?.push?.(reversals.length ? `Period ${month} closed · ${reversals.length} accrual${reversals.length === 1 ? "" : "s"} reversed in next period` : `Period ${month} closed`, { tone: "success", duration: 5000 });
+  };
+
+  const reopenPeriod = () => {
+    if (!canRunPayroll) return;
+    if (!window.confirm(`Re-open period ${month}? This will allow edits to all journals dated in this month.`)) return;
+    update({ closedPeriods: (state.closedPeriods || []).filter(c => !(c.month === month && c.propertyId === propId)) });
+    pushActivity(ctx, "period.reopen", { month, propertyId: propId });
+    toast?.push?.(`Period ${month} re-opened`, { tone: "warn" });
+  };
+
+  return (
+    <div className="p-8 space-y-5 max-w-4xl mx-auto">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <div className="inline-flex items-center gap-2 mb-1">
+            <span className="text-amber-700 text-xs uppercase tracking-[0.2em] font-bold">Period Close · Month-End Wizard</span>
+          </div>
+          <h2 className="font-display text-3xl text-stone-900">{propId === "all" ? "All properties" : accessibleProperties.find(p => p.id === propId)?.name} · {month}</h2>
+          <p className="text-sm text-stone-500 mt-1">
+            {isAlreadyClosed
+              ? <span className="text-stone-700">This period is currently <strong>closed</strong>. Re-opening will allow edits.</span>
+              : "Run the pre-close checks. Closing locks every journal in this month, posts auto-reversals for any accruals, and triggers the audit trail."}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {accessibleProperties.length > 1 && (
+            <select value={propId} onChange={e => setPropId(e.target.value)} className="px-3 py-2 text-sm border border-stone-300 rounded-md bg-white">
+              {accessibleProperties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          )}
+          <input type="month" value={month} onChange={e => setMonth(e.target.value)} className="px-3 py-2 text-sm border border-stone-300 rounded-md bg-white tabular" />
+        </div>
+      </div>
+
+      <Card className="overflow-hidden">
+        <div className={`px-6 py-3 border-b border-stone-200 ${overall === "pass" ? "bg-emerald-50" : overall === "warn" ? "bg-amber-50" : "bg-rose-50"}`}>
+          <div className="flex items-center gap-3">
+            {overall === "pass" ? <CheckCircle2 size={20} className="text-emerald-600" />
+              : overall === "warn" ? <AlertCircle size={20} className="text-amber-700" />
+              : <AlertCircle size={20} className="text-rose-700" />}
+            <div className="flex-1">
+              <h3 className="font-display text-lg text-stone-900">
+                {overall === "pass" ? "Ready to close" : overall === "warn" ? "Warnings — review before closing" : "Issues found — fix before closing"}
+              </h3>
+              <p className="text-xs text-stone-600">
+                {result.checks.length} checks · {result.checks.filter(c => c.status === "pass").length} pass · {result.checks.filter(c => c.status === "warn").length} warn · {result.checks.filter(c => c.status === "fail").length} fail
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="divide-y divide-stone-100">
+          {result.checks.map((c) => (
+            <div key={c.id} className="px-6 py-3 flex items-start gap-3">
+              <div className="mt-0.5">
+                {c.status === "pass" ? <CheckCircle2 size={16} className="text-emerald-600" />
+                  : c.status === "warn" ? <AlertCircle size={16} className="text-amber-600" />
+                  : <X size={16} className="text-rose-600" />}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-stone-900">{c.label}</div>
+                <div className="text-xs text-stone-600 mt-0.5">{c.detail}</div>
+              </div>
+              {c.status !== "pass" && (
+                <button
+                  onClick={() => {
+                    if (c.id === "tb") setTab?.("trial-balance");
+                    else if (c.id === "drafts" || c.id === "approvals") setTab?.("journal");
+                    else if (c.id === "reports") setTab?.("ingest");
+                    else if (c.id === "bankrec") setTab?.("bankrec");
+                    else if (c.id === "ap-pending") setTab?.("ap");
+                  }}
+                  className="text-[11px] text-amber-700 hover:text-amber-900 font-semibold whitespace-nowrap"
+                >
+                  Fix →
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* Reversing accrual preview */}
+      {(() => {
+        const reversals = _reversingEntriesFor(state, propId, month, currentUser.id);
+        if (!reversals.length) return null;
+        return (
+          <Card className="p-5 bg-violet-50 border-violet-200">
+            <div className="flex gap-3">
+              <ArrowRight size={18} className="text-violet-700 mt-0.5" />
+              <div className="flex-1">
+                <h4 className="font-semibold text-stone-900 mb-1">{reversals.length} accrual{reversals.length === 1 ? "" : "s"} will auto-reverse</h4>
+                <p className="text-xs text-stone-600">
+                  Reversing entries will post on {reversals[0]?.date} (day 1 of next period) for every entry flagged "Reversing accrual" in this month.
+                </p>
+                <ul className="mt-2 text-xs text-stone-700 space-y-1">
+                  {reversals.slice(0, 6).map(r => <li key={r.id}>• {r.description.replace("Reversal · ", "")}</li>)}
+                  {reversals.length > 6 && <li className="text-stone-500">…and {reversals.length - 6} more</li>}
+                </ul>
+              </div>
+            </div>
+          </Card>
+        );
+      })()}
+
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="text-xs text-stone-500">
+          {isAlreadyClosed
+            ? `Closed by ${state.employees.find(e => e.id === (state.closedPeriods.find(c => c.month === month && c.propertyId === propId)?.closedBy))?.firstName || "system"}`
+            : "Closing creates an immutable lock on every journal in this period."}
+        </div>
+        <div className="flex items-center gap-2">
+          {isAlreadyClosed ? (
+            <Button variant="secondary" onClick={reopenPeriod}>Re-open period</Button>
+          ) : (
+            <>
+              {overall === "fail" && canRunPayroll && (
+                <Button variant="danger" onClick={() => closePeriod(true)}>Close anyway (override)</Button>
+              )}
+              <Button
+                variant="success"
+                disabled={!canClose}
+                onClick={() => closePeriod(false)}
+                title={!canRunPayroll ? "Manager role required" : !canClose ? "Resolve failing checks first" : ""}
+              >
+                <CheckCircle2 size={14} />
+                {canClose ? "Close period" : "Resolve checks first"}
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================================
    GL MAPPING PANE
    ========================================================================= */
 function GLMappingPane({ ctx }) {
@@ -11155,6 +11639,12 @@ function ApiKeyCard() {
   const [key, setKey] = useState(() => {
     try { return localStorage.getItem("hotelops:apiKey") || ""; } catch { return ""; }
   });
+  const [proxyUrl, setProxyUrl] = useState(() => {
+    try { return localStorage.getItem("hotelops:proxyUrl") || ""; } catch { return ""; }
+  });
+  const [proxyAuth, setProxyAuth] = useState(() => {
+    try { return localStorage.getItem("hotelops:proxyAuth") || ""; } catch { return ""; }
+  });
   const [reveal, setReveal] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -11162,39 +11652,91 @@ function ApiKeyCard() {
     try {
       if (key.trim()) localStorage.setItem("hotelops:apiKey", key.trim());
       else localStorage.removeItem("hotelops:apiKey");
+      if (proxyUrl.trim()) localStorage.setItem("hotelops:proxyUrl", proxyUrl.trim());
+      else localStorage.removeItem("hotelops:proxyUrl");
+      if (proxyAuth.trim()) localStorage.setItem("hotelops:proxyAuth", proxyAuth.trim());
+      else localStorage.removeItem("hotelops:proxyAuth");
       setSaved(true);
       setTimeout(() => setSaved(false), 1800);
     } catch {}
   };
   const masked = key ? `${key.slice(0, 8)}${"•".repeat(Math.max(0, key.length - 12))}${key.slice(-4)}` : "";
+  const usingProxy = !!proxyUrl.trim();
 
   return (
     <Card>
       <div className="px-6 py-4 border-b border-stone-200">
         <h3 className="font-display text-lg text-stone-900">AI Enrichment</h3>
         <p className="text-xs text-stone-500 mt-0.5">
-          The local audit parser works without any key. Add a Claude API key below to also extract from PDF / image uploads. The key is stored only in your browser's localStorage.
+          The local audit parser works without any AI. Add Claude access below for PDF / image OCR.
+          {" "}<strong className="text-stone-900">For production, use the Anthropic Proxy</strong> so the API key never ships to clients.
         </p>
       </div>
-      <div className="p-6 space-y-3">
-        <label className="block">
-          <span className="block text-xs uppercase tracking-wider text-stone-500 mb-1.5 font-medium">Anthropic API Key</span>
-          <div className="flex gap-2">
-            <input
-              type={reveal ? "text" : "password"}
-              value={reveal ? key : (key && !reveal ? masked : key)}
-              onChange={e => { if (reveal || !key) setKey(e.target.value); }}
-              onFocus={() => setReveal(true)}
-              placeholder="sk-ant-…"
-              className="flex-1 px-3 py-2 text-sm font-mono border border-stone-300 rounded-md bg-white focus:border-amber-700 focus:outline-none focus:ring-1 focus:ring-amber-700"
-            />
-            <Button variant="secondary" onClick={() => setReveal(r => !r)}>{reveal ? "Hide" : "Show"}</Button>
-            <Button variant="primary" onClick={save}><Save size={14} />{saved ? "Saved" : "Save"}</Button>
+      <div className="p-6 space-y-5">
+        {/* Anthropic Proxy — preferred, server-side */}
+        <div className="space-y-2 p-3 rounded-md bg-emerald-50/30 border border-emerald-200">
+          <div className="flex items-center gap-2">
+            <Shield size={14} className="text-emerald-700" />
+            <span className="text-xs uppercase tracking-wider text-emerald-800 font-bold">Anthropic Proxy (recommended)</span>
+            {usingProxy && <Badge color="emerald">Active</Badge>}
           </div>
-        </label>
-        <p className="text-[11px] text-stone-400">
-          Tip: HotelOps reaches the Anthropic API directly from this browser. For real production use, route through a backend proxy that holds the key server-side.
-        </p>
+          <p className="text-[11px] text-stone-600">
+            Deploy <code className="font-mono bg-white px-1 rounded border border-stone-200">worker/anthropic-proxy.js</code> as a Cloudflare Worker; secrets stay server-side. See <code className="font-mono bg-white px-1 rounded border border-stone-200">worker/README.md</code> for the 3-command deploy.
+          </p>
+          <label className="block">
+            <span className="block text-[10px] uppercase tracking-wider text-stone-500 mb-1 font-medium">Proxy URL</span>
+            <input
+              type="text"
+              value={proxyUrl}
+              onChange={e => setProxyUrl(e.target.value)}
+              placeholder="https://hotelops-anthropic-proxy.your.workers.dev"
+              className="w-full px-3 py-2 text-sm font-mono border border-stone-300 rounded-md bg-white focus:border-amber-700 focus:outline-none focus:ring-1 focus:ring-amber-700"
+            />
+          </label>
+          <label className="block">
+            <span className="block text-[10px] uppercase tracking-wider text-stone-500 mb-1 font-medium">
+              Shared Secret (X-HotelOps-Auth) <span className="text-stone-400 font-normal lowercase tracking-normal">— optional but recommended</span>
+            </span>
+            <input
+              type="password"
+              value={proxyAuth}
+              onChange={e => setProxyAuth(e.target.value)}
+              placeholder="leave blank if PROXY_AUTH_TOKEN not set"
+              className="w-full px-3 py-2 text-sm font-mono border border-stone-300 rounded-md bg-white focus:border-amber-700 focus:outline-none focus:ring-1 focus:ring-amber-700"
+            />
+          </label>
+        </div>
+
+        {/* Direct API key — legacy / fallback */}
+        <div className={`space-y-2 p-3 rounded-md border ${usingProxy ? "border-stone-200 bg-stone-50/40 opacity-60" : "border-amber-200 bg-amber-50/30"}`}>
+          <div className="flex items-center gap-2">
+            <AlertCircle size={14} className={usingProxy ? "text-stone-500" : "text-amber-700"} />
+            <span className="text-xs uppercase tracking-wider text-stone-700 font-bold">Direct API Key</span>
+            {!usingProxy && key && <Badge color="amber">Active</Badge>}
+            {usingProxy && <Badge color="stone">Bypassed by proxy</Badge>}
+          </div>
+          <p className="text-[11px] text-stone-600">
+            Reaches Anthropic directly from this browser — easiest, but the key ends up in <code className="font-mono">localStorage</code>. Fine for solo testing, not for shared deployments.
+          </p>
+          <label className="block">
+            <span className="block text-[10px] uppercase tracking-wider text-stone-500 mb-1 font-medium">Anthropic API Key</span>
+            <div className="flex gap-2">
+              <input
+                type={reveal ? "text" : "password"}
+                value={reveal ? key : (key && !reveal ? masked : key)}
+                onChange={e => { if (reveal || !key) setKey(e.target.value); }}
+                onFocus={() => setReveal(true)}
+                placeholder="sk-ant-…"
+                className="flex-1 px-3 py-2 text-sm font-mono border border-stone-300 rounded-md bg-white focus:border-amber-700 focus:outline-none focus:ring-1 focus:ring-amber-700"
+              />
+              <Button variant="secondary" onClick={() => setReveal(r => !r)}>{reveal ? "Hide" : "Show"}</Button>
+            </div>
+          </label>
+        </div>
+
+        <div className="flex justify-end">
+          <Button variant="primary" onClick={save}><Save size={14} />{saved ? "Saved" : "Save AI Settings"}</Button>
+        </div>
       </div>
     </Card>
   );
