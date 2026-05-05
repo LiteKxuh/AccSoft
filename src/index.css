@@ -100,6 +100,8 @@ body {
   /* Hide nav chrome */
   aside,
   .print\:hide,
+  .no-print,
+  [data-no-print],
   button[title*="Toggle dark"],
   button[title*="command palette"],
   .recharts-tooltip-wrapper { display: none !important; }

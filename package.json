@@ -1,7 +1,7 @@
 {
   "name": "hotelops",
   "private": false,
-  "version": "1.1.1",
+  "version": "1.1.2",
   "type": "module",
   "main": "electron/main.cjs",
   "description": "HotelOps — premium hotel accounting, daily flash, payroll, scheduling, and night-audit ingestion suite.",
@@ -21,10 +21,13 @@
   },
   "dependencies": {
     "electron-updater": "^6.3.9",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.7",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "recharts": "^2.13.3"
+    "recharts": "^2.13.3",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
@@ -60,20 +63,26 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build-resources/icon.ico",
       "artifactName": "HotelOps-Setup-${version}.${ext}"
     },
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "icon": "build-resources/icon-1024.png",
       "category": "public.app-category.business",
       "artifactName": "HotelOps-${version}.${ext}"
     },
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "icon": "build-resources/icon.png",
       "artifactName": "HotelOps-${version}.${ext}",
       "category": "Office"
@@ -92,8 +101,14 @@
       "include": null
     },
     "extraResources": [
-      { "from": "build-resources/icon.ico", "to": "icon.ico" },
-      { "from": "build-resources/icon.png", "to": "icon.png" }
+      {
+        "from": "build-resources/icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "build-resources/icon.png",
+        "to": "icon.png"
+      }
     ],
     "publish": [
       {

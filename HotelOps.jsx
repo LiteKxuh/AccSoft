@@ -6,7 +6,7 @@ import {
   ArrowLeft, ArrowRight, X, Save, Play, Pause, ClipboardList,
   TrendingUp, BedDouble, Home, ChevronRight, MoreHorizontal,
   Shield, UserCircle2, MapPin, Phone, Mail, Hash, Briefcase,
-  LayoutDashboard, Coffee, FileCheck2, Paperclip, Receipt
+  LayoutDashboard, Coffee, FileCheck2, Paperclip, Receipt, FileSpreadsheet
 } from "lucide-react";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -17,6 +17,14 @@ import { useToast as _useToast } from "./src/lib/toast.jsx";
 import { commandBus as _commandBus } from "./src/lib/CommandPalette.jsx";
 import { forecast as _forecast } from "./src/lib/forecast.js";
 import { autoSeedBudgets as _autoSeedBudgets, actualsFor as _actualsFor, budgetTotal as _budgetTotal, pacing as _pacing, monthOf as _monthOf, emptyBudget as _emptyBudget } from "./src/lib/budget.js";
+import { ExportMenu as _ExportMenu } from "./src/lib/ExportMenu.jsx";
+import { ImportExcelDialog as _ImportExcelDialog } from "./src/lib/ImportExcelDialog.jsx";
+import {
+  BUDGET_ACCOUNT_SCHEMA as _BUDGET_ACCOUNT_SCHEMA,
+  applyBudgetRowsToBudget as _applyBudgetRowsToBudget,
+  INVOICE_SCHEMA as _INVOICE_SCHEMA,
+  AUDIT_SCHEMA as _AUDIT_SCHEMA,
+} from "./src/lib/excelImport.js";
 
 /* =========================================================================
    FONTS + GLOBAL STYLE
@@ -4419,8 +4427,47 @@ function FlashReportPane({ ctx, setTab }) {
           </select>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="secondary" size="sm" onClick={() => exportFlashJson(focusReport, property)}><Download size={13} />JSON</Button>
-          <Button variant="secondary" size="sm" onClick={() => exportFlashCsv(focusReport, property)}><Download size={13} />CSV</Button>
+          <_ExportMenu
+            filename={`Flash_${property?.name || "Property"}_${focusReport.date}`}
+            title="Daily Flash Report"
+            subtitle={`${property?.name} · ${fmtDate(focusReport.date)} (${fmtDayName(focusReport.date)})`}
+            propertyName={property?.name}
+            period={focusReport.date}
+            summary={[
+              { label: "Total Revenue", value: fmtMoney(focusReport.totalRevenue) },
+              { label: "Occupancy", value: fmtPct(focusReport.occupancy) },
+              { label: "ADR", value: fmtMoney(focusReport.adr) },
+              { label: "RevPAR", value: fmtMoney(focusReport.revpar) },
+            ]}
+            footer={`HotelOps · ${property?.name || ""}`}
+            columns={[
+              { key: "metric", label: "Metric", width: 24 },
+              { key: "value", label: "Value", width: 18, align: "right" },
+            ]}
+            rows={[
+              { metric: "Date", value: focusReport.date },
+              { metric: "Day of Week", value: fmtDayName(focusReport.date) },
+              { metric: "Rooms Available", value: focusReport.roomsAvailable },
+              { metric: "Rooms Sold", value: focusReport.roomsSold },
+              { metric: "Occupancy", value: fmtPct(focusReport.occupancy) },
+              { metric: "ADR", value: fmtMoney(focusReport.adr) },
+              { metric: "RevPAR", value: fmtMoney(focusReport.revpar) },
+              { metric: "Room Revenue", value: fmtMoney(focusReport.roomRevenue) },
+              { metric: "F&B - Restaurant", value: fmtMoney(focusReport.breakdown?.revenue?.fb?.restaurant || 0) },
+              { metric: "F&B - Bar", value: fmtMoney(focusReport.breakdown?.revenue?.fb?.bar || 0) },
+              { metric: "F&B - Banquet", value: fmtMoney(focusReport.breakdown?.revenue?.fb?.banquet || 0) },
+              { metric: "Other - Parking", value: fmtMoney(focusReport.breakdown?.revenue?.other?.parking || 0) },
+              { metric: "Other - Spa", value: fmtMoney(focusReport.breakdown?.revenue?.other?.spa || 0) },
+              { metric: "Other - Misc", value: fmtMoney(focusReport.breakdown?.revenue?.other?.misc || 0) },
+              { metric: "Total Revenue", value: fmtMoney(focusReport.totalRevenue) },
+              { metric: "Tax - Occupancy", value: fmtMoney(focusReport.breakdown?.taxes?.occupancy || 0) },
+              { metric: "Tax - Sales", value: fmtMoney(focusReport.breakdown?.taxes?.sales || 0) },
+              { metric: "Tax - Tourism", value: fmtMoney(focusReport.breakdown?.taxes?.tourism || 0) },
+              { metric: "Cash Settlement", value: fmtMoney(focusReport.breakdown?.payments?.cash || 0) },
+              { metric: "Credit Card Settlement", value: fmtMoney(focusReport.breakdown?.payments?.creditCard || 0) },
+              { metric: "Direct Bill (City Ledger)", value: fmtMoney(focusReport.breakdown?.payments?.directBill || 0) },
+            ]}
+          />
           <Button variant="accent" size="sm" onClick={() => setTab("ingest")}><Upload size={13} />Ingest New</Button>
         </div>
       </div>
@@ -5110,7 +5157,7 @@ function AuditTrailFooter({ report, ctx }) {
    ========================================================================= */
 function IngestPane({ ctx, setTab }) {
   const { state, update, currentUser, perms, accessibleProperties, toast } = ctx;
-  const [mode, setMode] = useState("paste"); // paste | upload
+  const [mode, setMode] = useState("paste"); // paste | upload | excel
   const [text, setText] = useState("");
   const [file, setFile] = useState(null);
   const [phase, setPhase] = useState("idle"); // idle | processing | review | batchReview | error
@@ -5118,7 +5165,47 @@ function IngestPane({ ctx, setTab }) {
   const [batch, setBatch] = useState(null); // array of extracted reports
   const [error, setError] = useState(null);
   const [progress, setProgress] = useState(0);
+  const [showExcelImport, setShowExcelImport] = useState(false);
   const fileInput = useRef(null);
+
+  // Convert Excel-imported audit rows into report objects ready to post.
+  const handleExcelAuditImport = (rows) => {
+    if (!rows.length) return;
+    const propId = accessibleProperties[0]?.id;
+    const newReports = rows.filter(r => r.date && (r.roomsSold || r.roomRevenue)).map((r) => {
+      const totalRevenue = (r.roomRevenue || 0)
+        + (r.fbRestaurant || 0) + (r.fbBar || 0) + (r.fbBanquet || 0)
+        + (r.otherParking || 0) + (r.otherSpa || 0) + (r.otherMisc || 0);
+      const sold = r.roomsSold || 0;
+      const avail = r.roomsAvailable || 0;
+      return {
+        id: newId("rpt"),
+        propertyId: propId,
+        date: String(r.date).slice(0, 10),
+        roomRevenue: r.roomRevenue || 0,
+        otherRevenue: (r.fbRestaurant || 0) + (r.fbBar || 0) + (r.fbBanquet || 0) + (r.otherParking || 0) + (r.otherSpa || 0) + (r.otherMisc || 0),
+        totalRevenue,
+        roomsAvailable: avail,
+        roomsSold: sold,
+        occupancy: avail ? sold / avail : 0,
+        adr: sold ? (r.roomRevenue || 0) / sold : 0,
+        breakdown: {
+          rooms: { available: avail, sold },
+          revenue: {
+            rooms: r.roomRevenue || 0,
+            fb: { restaurant: r.fbRestaurant || 0, bar: r.fbBar || 0, banquet: r.fbBanquet || 0 },
+            other: { parking: r.otherParking || 0, spa: r.otherSpa || 0, misc: r.otherMisc || 0 },
+          },
+          taxes: { occupancy: r.taxOccupancy || 0, sales: r.taxSales || 0 },
+        },
+        ingestion: { source: "excel_import", ingestedAt: new Date().toISOString(), ingestedBy: currentUser.id },
+      };
+    });
+    update({ reports: [...state.reports, ...newReports] });
+    pushActivity(ctx, "report.import", { count: newReports.length });
+    toast?.push?.(`Imported ${newReports.length} audit report${newReports.length === 1 ? "" : "s"}`, { tone: "success" });
+    if (typeof setTab === "function") setTab("reports");
+  };
 
   // Detect batch input live so we can show the user a chip
   const batchPreview = useMemo(() => {
@@ -5326,6 +5413,7 @@ function IngestPane({ ctx, setTab }) {
         {[
           { id: "paste", label: "Paste Text", icon: FileText },
           { id: "upload", label: "Upload Document", icon: Upload },
+          { id: "excel", label: "Excel / CSV", icon: FileSpreadsheet },
         ].map(m => (
           <button key={m.id} onClick={() => setMode(m.id)}
             className={`px-4 py-2 text-sm font-medium rounded-md inline-flex items-center gap-2 transition-all ${mode === m.id ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-800"}`}>
@@ -5355,10 +5443,31 @@ CC: $9,840  Cash: $448  DB: $865  Other: $20
 Guests in house: 116`}
             className="w-full p-5 text-sm font-mono border-0 rounded-md resize-none focus:outline-none scroll-thin bg-stone-50/40"
           />
-        ) : (
+        ) : mode === "upload" ? (
           <UploadDropZone file={file} setFile={setFile} fileInput={fileInput} />
+        ) : (
+          <div className="p-10 text-center">
+            <FileSpreadsheet size={36} className="mx-auto text-stone-400 mb-3" />
+            <h4 className="font-display text-lg text-stone-900 mb-1">Bulk-import a month of audits from Excel</h4>
+            <p className="text-sm text-stone-500 mb-5 max-w-2xl mx-auto">
+              One row per business date. Required columns: <strong>Date</strong>, <strong>Rooms Available</strong>, <strong>Rooms Sold</strong>, <strong>Room Revenue</strong>.
+              Optional: F&B (Restaurant / Bar / Banquet), Other (Parking / Spa / Misc), and tax columns. We&apos;ll auto-match your headers.
+            </p>
+            <Button variant="accent" onClick={() => setShowExcelImport(true)}>
+              <Upload size={14} /> Choose Excel / CSV file
+            </Button>
+          </div>
         )}
       </Card>
+      <_ImportExcelDialog
+        open={showExcelImport}
+        onClose={() => setShowExcelImport(false)}
+        title="Import Daily Audit Reports"
+        subtitle="Each row becomes a posted flash report."
+        helpText="Required: Date, Rooms Available, Rooms Sold, Room Revenue. Optional: Restaurant, Bar, Banquet, Parking, Spa, Misc, Occupancy Tax, Sales Tax."
+        schema={_AUDIT_SCHEMA}
+        onImport={handleExcelAuditImport}
+      />
 
       {/* Sample loader */}
       {mode === "paste" && !text && (
@@ -5384,23 +5493,25 @@ Guests in house: 116`}
       )}
 
       {/* Action bar */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="text-xs text-stone-500 max-w-md">
-          <span className="font-semibold text-stone-700">How it works:</span> the local parser reads any format — no API needed.
-          Add a Claude API key in Settings → System to enable PDF / image OCR enrichment.
+      {mode !== "excel" && (
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div className="text-xs text-stone-500 max-w-md">
+            <span className="font-semibold text-stone-700">How it works:</span> the local parser reads any format — no API needed.
+            Add a Claude API key in Settings → System to enable PDF / image OCR enrichment.
+          </div>
+          <div className="flex items-center gap-2">
+            {(text || file) && <Button variant="ghost" onClick={reset}>Clear</Button>}
+            <Button variant="accent" size="lg"
+              disabled={mode === "paste" ? text.trim().length < 20 : !file}
+              onClick={startExtraction}>
+              <span className="inline-flex items-center gap-2">
+                Extract Audit
+                <span className="opacity-60">→</span>
+              </span>
+            </Button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          {(text || file) && <Button variant="ghost" onClick={reset}>Clear</Button>}
-          <Button variant="accent" size="lg"
-            disabled={mode === "paste" ? text.trim().length < 20 : !file}
-            onClick={startExtraction}>
-            <span className="inline-flex items-center gap-2">
-              Extract Audit
-              <span className="opacity-60">→</span>
-            </span>
-          </Button>
-        </div>
-      </div>
+      )}
 
       {/* Recent ingestions */}
       {recentIngests.length > 0 && (
@@ -5755,6 +5866,7 @@ function BudgetPane({ ctx }) {
   const today = new Date();
   const defaultMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
   const [month, setMonth] = useState(defaultMonth);
+  const [showImport, setShowImport] = useState(false);
 
   const property = state.properties.find(p => p.id === propId);
   const budget = useMemo(() => {
@@ -5816,8 +5928,46 @@ function BudgetPane({ ctx }) {
 
   const editable = !state.closedPeriods?.some(c => c.propertyId === propId && c.month === month);
 
+  // Export rows for Budget vs Actual
+  const budgetExportRows = [
+    { account: "Rooms Revenue", budget: budget.rooms?.revenue || 0, actual: actual?.rooms?.revenue || 0, variance: (actual?.rooms?.revenue || 0) - (budget.rooms?.revenue || 0) },
+    { account: "Restaurant",    budget: budget.fb?.restaurant || 0, actual: actual?.fb?.restaurant || 0, variance: (actual?.fb?.restaurant || 0) - (budget.fb?.restaurant || 0) },
+    { account: "Bar / Lounge",  budget: budget.fb?.bar || 0,        actual: actual?.fb?.bar || 0,        variance: (actual?.fb?.bar || 0) - (budget.fb?.bar || 0) },
+    { account: "Banquet",       budget: budget.fb?.banquet || 0,    actual: actual?.fb?.banquet || 0,    variance: (actual?.fb?.banquet || 0) - (budget.fb?.banquet || 0) },
+    { account: "Parking",       budget: budget.other?.parking || 0, actual: actual?.other?.parking || 0, variance: (actual?.other?.parking || 0) - (budget.other?.parking || 0) },
+    { account: "Spa",           budget: budget.other?.spa || 0,     actual: actual?.other?.spa || 0,     variance: (actual?.other?.spa || 0) - (budget.other?.spa || 0) },
+    { account: "Telephone",     budget: budget.other?.telephone || 0, actual: actual?.other?.telephone || 0, variance: (actual?.other?.telephone || 0) - (budget.other?.telephone || 0) },
+    { account: "Misc / Sundry", budget: budget.other?.misc || 0,    actual: actual?.other?.misc || 0,    variance: (actual?.other?.misc || 0) - (budget.other?.misc || 0) },
+    { account: "TOTAL",         budget: totalBudget,                actual: actual?.totalRevenue || 0,   variance: (actual?.totalRevenue || 0) - totalBudget },
+  ];
+  const budgetExportColumns = [
+    { key: "account", label: "Account", width: 26 },
+    { key: "budget",  label: "Budget", money: true, width: 16 },
+    { key: "actual",  label: "Actual MTD", money: true, width: 16 },
+    { key: "variance", label: "Variance", money: true, width: 16 },
+  ];
+
+  const handleBudgetImport = (rows) => {
+    const { budget: nextBudget, applied, skipped } = _applyBudgetRowsToBudget(rows, budget);
+    saveBudget(nextBudget);
+    if (skipped.length) {
+      toast?.push?.(`Imported ${applied} lines · ${skipped.length} unrecognized: ${skipped.slice(0, 3).join(", ")}${skipped.length > 3 ? "..." : ""}`, { tone: "warn", duration: 7000 });
+    } else {
+      toast?.push?.(`Imported ${applied} budget lines`, { tone: "success" });
+    }
+  };
+
   return (
     <div className="p-8 space-y-5 max-w-7xl mx-auto">
+      <_ImportExcelDialog
+        open={showImport}
+        onClose={() => setShowImport(false)}
+        title={`Import Budget — ${property?.name || ""} · ${month}`}
+        subtitle="Map your spreadsheet's Account and Amount columns. We'll route each line to the matching budget category."
+        helpText={`Use a simple two-column layout: an "Account" column (e.g. "Rooms Revenue", "Restaurant", "Bar", "Parking", "Spa", "Misc") and an "Amount" column with the budgeted dollar amount for ${month}.`}
+        schema={_BUDGET_ACCOUNT_SCHEMA}
+        onImport={handleBudgetImport}
+      />
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -5842,6 +5992,32 @@ function BudgetPane({ ctx }) {
           <select value={month} onChange={e => setMonth(e.target.value)} className="px-3 py-2 text-sm border border-stone-300 rounded-md bg-white font-medium tabular">
             {monthOptions.map(m => <option key={m} value={m}>{m}</option>)}
           </select>
+          {editable && (
+            <button
+              type="button"
+              onClick={() => setShowImport(true)}
+              className="px-3 py-1.5 text-xs font-medium rounded-md bg-white text-stone-900 border border-stone-300 hover:bg-stone-50 inline-flex items-center gap-1.5 no-print"
+              data-no-print
+              title="Import budget from an Excel/CSV file"
+            >
+              <Upload size={12} /> Import Excel
+            </button>
+          )}
+          <_ExportMenu
+            filename={`Budget_${property?.name || "Property"}_${month}`}
+            title="Budget vs Actual"
+            subtitle={`Plan vs Actual · ${month}`}
+            propertyName={property?.name}
+            period={month}
+            summary={[
+              { label: "Budget Total", value: fmtMoney(totalBudget) },
+              { label: "Actual MTD", value: fmtMoney(actual?.totalRevenue || 0) },
+              { label: "Variance", value: fmtMoney((actual?.totalRevenue || 0) - totalBudget) },
+            ]}
+            footer={`HotelOps · ${property?.name || ""} · ${month}`}
+            columns={budgetExportColumns}
+            rows={budgetExportRows}
+          />
         </div>
       </div>
 
@@ -6129,7 +6305,23 @@ function CustomReportsPane({ ctx }) {
             <option value={365}>Last 365 days</option>
           </select>
           <Button variant="secondary" onClick={() => setShowSaveModal(true)}><Save size={14} />Save Template</Button>
-          <Button variant="primary" onClick={exportCsv}><Download size={14} />Export CSV</Button>
+          <_ExportMenu
+            filename="CustomReport"
+            title="Custom Report"
+            subtitle={`${data.length} rows · last ${range} days`}
+            footer="HotelOps · Custom Report"
+            columns={cols.map(id => {
+              const def = REPORT_COLUMNS.find(c => c.id === id);
+              if (!def) return null;
+              const isMoney = ["roomRev", "fbRev", "otherRev", "totalRev", "adr", "revpar", "occTax", "salesTax", "tourismTax", "cash", "cc", "directBill"].includes(id);
+              const isPct = ["occupancy"].includes(id);
+              return { key: id, label: def.label, money: isMoney, pct: isPct, type: def.isNum ? "number" : undefined };
+            }).filter(Boolean)}
+            rows={data.map(r => Object.fromEntries(cols.map(id => {
+              const def = REPORT_COLUMNS.find(c => c.id === id);
+              return [id, def ? def.get(r, propsById) : ""];
+            })))}
+          />
         </div>
       </div>
 
@@ -6504,14 +6696,43 @@ function TaxCalendarPane({ ctx }) {
 
   return (
     <div className="p-8 space-y-5 max-w-7xl mx-auto">
-      <div>
-        <div className="inline-flex items-center gap-2 mb-1">
-          <span className="text-amber-700 text-xs uppercase tracking-[0.2em] font-bold">Tax Compliance · Calendar</span>
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <div className="inline-flex items-center gap-2 mb-1">
+            <span className="text-amber-700 text-xs uppercase tracking-[0.2em] font-bold">Tax Compliance · Calendar</span>
+          </div>
+          <h2 className="font-display text-3xl text-stone-900">{fmtMoney(totalUpcoming + totalOverdue)} accrued</h2>
+          <p className="text-sm text-stone-500 mt-1">
+            Upcoming filings (next 60 days) · monthly occupancy &amp; sales filed by the 20th, tourism tax quarterly.
+          </p>
         </div>
-        <h2 className="font-display text-3xl text-stone-900">{fmtMoney(totalUpcoming + totalOverdue)} accrued</h2>
-        <p className="text-sm text-stone-500 mt-1">
-          Upcoming filings (next 60 days) · monthly occupancy &amp; sales filed by the 20th, tourism tax quarterly.
-        </p>
+        <_ExportMenu
+          filename="TaxCalendar"
+          title="Tax Filing Schedule"
+          subtitle="Liabilities by property, period, and type"
+          summary={[
+            { label: "Total Accrued", value: fmtMoney(totalUpcoming + totalOverdue) },
+            { label: "Overdue", value: fmtMoney(totalOverdue) },
+            { label: "Next 30 days", value: fmtMoney(upcoming.filter(l => l.daysToDue <= 30).reduce((s, l) => s + l.amount, 0)) },
+          ]}
+          footer="HotelOps · Tax Calendar"
+          columns={[
+            { key: "property", label: "Property", width: 22 },
+            { key: "period", label: "Period", width: 12 },
+            { key: "type", label: "Tax Type", width: 16 },
+            { key: "dueDate", label: "Due By", type: "date", width: 12 },
+            { key: "status", label: "Status", width: 12 },
+            { key: "amount", label: "Liability", money: true, width: 14 },
+          ]}
+          rows={liabilities.map(l => ({
+            property: l.propertyName,
+            period: l.month,
+            type: labelFor(l.type),
+            dueDate: l.dueDate,
+            status: l.overdue ? `${Math.abs(l.daysToDue)}d late` : l.daysToDue <= 7 ? "Due soon" : `${l.daysToDue}d`,
+            amount: l.amount,
+          }))}
+        />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -6651,6 +6872,61 @@ function YearEndFormsPane({ ctx }) {
     );
   }
 
+  // Build export data depending on form type
+  const w2ExportRows = formType === "w2"
+    ? state.employees.filter(e => e.status === "active" || e.status === "terminated").map((e) => {
+        const s = computeW2Summary(e, state.payrollRuns, year);
+        return {
+          name: `${e.firstName || ""} ${e.lastName || ""}`.trim(),
+          ssn: e.ssn ? `***-**-${String(e.ssn).slice(-4)}` : "",
+          status: e.status,
+          grossWages: s.grossWages,
+          fedWithheld: s.fedWithheld,
+          stateWithheld: s.stateWithheld,
+          ssWages: s.ssWages,
+          ssTax: s.ssTax,
+          medicareWages: s.medicareWages,
+          medicareTax: s.medicareTax,
+          paychecks: s.payrollCount,
+        };
+      })
+    : [];
+  const c1099ExportRows = formType === "1099"
+    ? state.contractors.map((c) => {
+        const ytd = state.contractorPayments
+          .filter(p => p.contractorId === c.id && new Date(p.date).getFullYear() === year)
+          .reduce((s, p) => s + (p.amount || 0), 0);
+        return {
+          name: c.name,
+          tin: c.tin ? `***-**-${String(c.tin).slice(-4)}` : "",
+          email: c.email || "",
+          ytd,
+          requires1099: ytd >= 600 ? "Yes" : "No",
+        };
+      })
+    : [];
+
+  const w2Cols = [
+    { key: "name", label: "Employee", width: 22 },
+    { key: "ssn", label: "SSN (masked)", width: 14 },
+    { key: "status", label: "Status", width: 10 },
+    { key: "grossWages", label: "Gross Wages", money: true, width: 14 },
+    { key: "fedWithheld", label: "Federal", money: true, width: 12 },
+    { key: "stateWithheld", label: "State", money: true, width: 12 },
+    { key: "ssWages", label: "SS Wages", money: true, width: 12 },
+    { key: "ssTax", label: "SS Tax", money: true, width: 12 },
+    { key: "medicareWages", label: "Medicare Wages", money: true, width: 14 },
+    { key: "medicareTax", label: "Medicare Tax", money: true, width: 12 },
+    { key: "paychecks", label: "Paychecks", type: "number", width: 10 },
+  ];
+  const c1099Cols = [
+    { key: "name", label: "Contractor", width: 22 },
+    { key: "tin", label: "TIN (masked)", width: 14 },
+    { key: "email", label: "Email", width: 22 },
+    { key: "ytd", label: "Paid YTD", money: true, width: 14 },
+    { key: "requires1099", label: "1099 Required", width: 14 },
+  ];
+
   return (
     <div className="px-8 pt-4 pb-12">
       {/* Header */}
@@ -6670,6 +6946,14 @@ function YearEndFormsPane({ ctx }) {
             <button onClick={() => setFormType("w2")} className={`px-4 py-2 text-sm font-medium ${formType === "w2" ? "bg-stone-900 text-white" : "text-stone-700 hover:bg-stone-50"}`}>W-2 · Employees</button>
             <button onClick={() => setFormType("1099")} className={`px-4 py-2 text-sm font-medium border-l border-stone-300 ${formType === "1099" ? "bg-stone-900 text-white" : "text-stone-700 hover:bg-stone-50"}`}>1099-NEC · Contractors</button>
           </div>
+          <_ExportMenu
+            filename={formType === "w2" ? `W2_Summary_${year}` : `1099_Summary_${year}`}
+            title={formType === "w2" ? `W-2 Summary · Tax Year ${year}` : `1099-NEC Summary · Tax Year ${year}`}
+            subtitle={formType === "w2" ? "Wages and withholding by employee" : "Contractor payments YTD"}
+            footer={`HotelOps · Year-end ${year}`}
+            columns={formType === "w2" ? w2Cols : c1099Cols}
+            rows={formType === "w2" ? w2ExportRows : c1099ExportRows}
+          />
         </div>
       </div>
 
@@ -7163,6 +7447,7 @@ function ApPane({ ctx }) {
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState(null);
   const [showVendorList, setShowVendorList] = useState(false);
+  const [showImport, setShowImport] = useState(false);
 
   const visibleInvoices = useMemo(() => {
     return state.invoices.filter(inv => propIds.includes(inv.propertyId));
@@ -7253,8 +7538,87 @@ function ApPane({ ctx }) {
     return <Badge color="sky">Open</Badge>;
   };
 
+  // ----- Excel import for vendor invoices -----
+  const handleInvoiceImport = (rows) => {
+    let imported = 0;
+    let skipped = 0;
+    const newInvoices = [];
+    const newVendors = [...state.vendors];
+    rows.forEach((r) => {
+      if (!r.vendorName || !r.amount || !r.issuedDate) { skipped++; return; }
+      // Find or create vendor
+      let vendor = newVendors.find(v => v.name?.toLowerCase() === String(r.vendorName).toLowerCase());
+      if (!vendor) {
+        vendor = { id: newId("vnd"), name: String(r.vendorName).trim(), category: r.category || "Other", createdAt: new Date().toISOString() };
+        newVendors.push(vendor);
+      }
+      const issued = String(r.issuedDate).slice(0, 10);
+      const due = r.dueDate ? String(r.dueDate).slice(0, 10) : iso(addDays(new Date(issued), 30));
+      const status = new Date(due) < TODAY ? "overdue" : "open";
+      newInvoices.push({
+        id: newId("inv"),
+        propertyId: activeProperty || propIds[0],
+        vendorId: vendor.id,
+        invoiceNumber: r.invoiceNumber || "",
+        issuedDate: issued,
+        dueDate: due,
+        amount: Number(r.amount) || 0,
+        category: r.category || vendor.category || "Other",
+        memo: r.memo || "",
+        status,
+        approvalState: "pending",
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser.id,
+        importedAt: new Date().toISOString(),
+      });
+      imported++;
+    });
+    update({ invoices: [...state.invoices, ...newInvoices], vendors: newVendors });
+    pushActivity(ctx, "invoice.import", { count: imported, skipped });
+    if (skipped > 0) {
+      toast?.push?.(`Imported ${imported} invoices · ${skipped} skipped (missing vendor / amount / date)`, { tone: "warn", duration: 7000 });
+    } else {
+      toast?.push?.(`Imported ${imported} invoices`, { tone: "success" });
+    }
+  };
+
+  // Build export rows for invoices
+  const invoiceExportRows = filtered.map((i) => {
+    const v = state.vendors.find(x => x.id === i.vendorId);
+    const prop = propsAll.find(p => p.id === i.propertyId);
+    return {
+      vendor: v?.name || "—",
+      invoiceNumber: i.invoiceNumber || "",
+      issuedDate: i.issuedDate,
+      dueDate: i.dueDate,
+      property: prop?.name || "",
+      category: i.category || v?.category || "",
+      amount: i.amount,
+      status: i.status === "paid" ? "Paid" : i.status === "overdue" ? "Overdue" : i.approvalState === "pending" ? "Pending" : "Open",
+    };
+  });
+  const invoiceExportColumns = [
+    { key: "vendor", label: "Vendor", width: 22 },
+    { key: "invoiceNumber", label: "Invoice #", width: 14 },
+    { key: "issuedDate", label: "Issued", type: "date", width: 12 },
+    { key: "dueDate", label: "Due", type: "date", width: 12 },
+    { key: "property", label: "Property", width: 18 },
+    { key: "category", label: "Category", width: 14 },
+    { key: "amount", label: "Amount", money: true, width: 14 },
+    { key: "status", label: "Status", width: 10 },
+  ];
+
   return (
     <div className="p-8 space-y-5 max-w-7xl mx-auto">
+      <_ImportExcelDialog
+        open={showImport}
+        onClose={() => setShowImport(false)}
+        title="Import Vendor Invoices"
+        subtitle="Bulk-load bills from your accountant or vendor portal."
+        helpText="Required columns: Vendor, Invoice Date, Amount. Optional: Invoice #, Due Date, Category, Memo. Missing vendors will be auto-created."
+        schema={_INVOICE_SCHEMA}
+        onImport={handleInvoiceImport}
+      />
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <div className="inline-flex items-center gap-2 mb-1">
@@ -7268,6 +7632,20 @@ function ApPane({ ctx }) {
         </div>
         <div className="flex items-center gap-2">
           <Button variant="secondary" onClick={() => setShowVendorList(true)}><Users size={14} />Vendors</Button>
+          <Button variant="secondary" onClick={() => setShowImport(true)}><Upload size={14} />Import</Button>
+          <_ExportMenu
+            filename="AccountsPayable"
+            title="Accounts Payable"
+            subtitle={`${filtered.length} invoices · ${filter === "all" ? "all statuses" : filter}`}
+            summary={[
+              { label: "Total Open", value: fmtMoney(aging.total) },
+              { label: "Current", value: fmtMoney(aging.current) },
+              { label: "30+", value: fmtMoney(aging.b30 + aging.b60 + aging.b90) },
+            ]}
+            footer={`HotelOps · A/P · ${new Date().toISOString().slice(0,10)}`}
+            columns={invoiceExportColumns}
+            rows={invoiceExportRows}
+          />
           <Button variant="accent" onClick={() => { setEditingInvoice(null); setShowInvoiceModal(true); }}><Plus size={14} />New Invoice</Button>
         </div>
       </div>
@@ -7578,14 +7956,44 @@ function ArAgingPane({ ctx }) {
     );
   };
 
+  const arExportRows = buckets.lines.map((l) => ({
+    property: l.property,
+    posted: l.date,
+    age: l.days,
+    bucket: ({ current: "Current", b30: "30-59", b60: "60-89", b90: "90-119", b120: "120+" })[l.bucket],
+    amount: l.amount,
+  }));
+  const arExportColumns = [
+    { key: "property", label: "Property", width: 22 },
+    { key: "posted", label: "Posted", type: "date", width: 12 },
+    { key: "age", label: "Age (days)", type: "number", width: 12, align: "right" },
+    { key: "bucket", label: "Bucket", width: 12 },
+    { key: "amount", label: "Amount", money: true, width: 14 },
+  ];
+
   return (
     <div className="p-8 space-y-5 max-w-7xl mx-auto">
-      <div>
-        <div className="inline-flex items-center gap-2 mb-1">
-          <span className="text-amber-700 text-xs uppercase tracking-[0.2em] font-bold">Accounts Receivable · City Ledger</span>
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <div className="inline-flex items-center gap-2 mb-1">
+            <span className="text-amber-700 text-xs uppercase tracking-[0.2em] font-bold">Accounts Receivable · City Ledger</span>
+          </div>
+          <h2 className="font-display text-3xl text-stone-900">{fmtMoney(buckets.total)} outstanding</h2>
+          <p className="text-sm text-stone-500 mt-1">Aged direct-bill receivables across {propsAll.length} {propsAll.length === 1 ? "property" : "properties"}.</p>
         </div>
-        <h2 className="font-display text-3xl text-stone-900">{fmtMoney(buckets.total)} outstanding</h2>
-        <p className="text-sm text-stone-500 mt-1">Aged direct-bill receivables across {propsAll.length} {propsAll.length === 1 ? "property" : "properties"}.</p>
+        <_ExportMenu
+          filename="AR_Aging"
+          title="Accounts Receivable · Aging"
+          subtitle="City ledger aged receivables"
+          summary={[
+            { label: "Total Outstanding", value: fmtMoney(buckets.total) },
+            { label: "Current", value: fmtMoney(buckets.current) },
+            { label: "60+ days", value: fmtMoney(buckets.b60 + buckets.b90 + buckets.b120) },
+          ]}
+          footer="HotelOps · A/R Aging"
+          columns={arExportColumns}
+          rows={arExportRows}
+        />
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -7693,6 +8101,33 @@ function PortfolioPane({ ctx, setTab }) {
 
   const maxRev = Math.max(1, ...rows.map(r => r.totalRev));
 
+  const portfolioExportRows = rows.map((r) => ({
+    property: r.property.name,
+    location: r.property.location,
+    rooms: r.property.rooms,
+    days: r.days,
+    totalRev: r.totalRev,
+    roomRev: r.roomRev,
+    fbRev: r.fbRev,
+    otherRev: r.otherRev,
+    occupancy: r.occupancy,
+    adr: r.adr,
+    revpar: r.revpar,
+  }));
+  const portfolioExportColumns = [
+    { key: "property", label: "Property", width: 22 },
+    { key: "location", label: "Location", width: 18 },
+    { key: "rooms", label: "Rooms", type: "number", width: 8 },
+    { key: "days", label: "Days", type: "number", width: 8 },
+    { key: "totalRev", label: "Total Revenue", money: true, width: 16 },
+    { key: "roomRev", label: "Room Rev", money: true, width: 14 },
+    { key: "fbRev", label: "F&B", money: true, width: 14 },
+    { key: "otherRev", label: "Other", money: true, width: 14 },
+    { key: "occupancy", label: "Occ", pct: true, width: 10 },
+    { key: "adr", label: "ADR", money: true, width: 12 },
+    { key: "revpar", label: "RevPAR", money: true, width: 12 },
+  ];
+
   return (
     <div className="p-8 space-y-6 max-w-7xl mx-auto">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -7703,13 +8138,29 @@ function PortfolioPane({ ctx, setTab }) {
           <h2 className="font-display text-3xl text-stone-900">All Properties · Last {range} days</h2>
           <p className="text-sm text-stone-500 mt-1">{propsAll.length} properties · {propsAll.reduce((s, p) => s + p.rooms, 0)} rooms total</p>
         </div>
-        <select value={range} onChange={e => setRange(Number(e.target.value))} className="px-3 py-2 text-sm border border-stone-300 rounded-md bg-white">
-          <option value={7}>Last 7 days</option>
-          <option value={14}>Last 14 days</option>
-          <option value={30}>Last 30 days</option>
-          <option value={60}>Last 60 days</option>
-          <option value={90}>Last 90 days</option>
-        </select>
+        <div className="flex items-center gap-2">
+          <select value={range} onChange={e => setRange(Number(e.target.value))} className="px-3 py-2 text-sm border border-stone-300 rounded-md bg-white">
+            <option value={7}>Last 7 days</option>
+            <option value={14}>Last 14 days</option>
+            <option value={30}>Last 30 days</option>
+            <option value={60}>Last 60 days</option>
+            <option value={90}>Last 90 days</option>
+          </select>
+          <_ExportMenu
+            filename={`Portfolio_${range}d`}
+            title="Portfolio Roll-up"
+            subtitle={`All properties · last ${range} days`}
+            summary={[
+              { label: "Portfolio Revenue", value: fmtMoney(grand.rev) },
+              { label: "Avg Occ", value: fmtPct(portfolioOcc) },
+              { label: "Avg ADR", value: fmtMoney(portfolioAdr) },
+              { label: "RevPAR", value: fmtMoney(portfolioRevpar) },
+            ]}
+            footer="HotelOps · Portfolio"
+            columns={portfolioExportColumns}
+            rows={portfolioExportRows}
+          />
+        </div>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -7862,6 +8313,33 @@ function PnlPane({ ctx }) {
   const totalActual = actual.totalRevenue || 0;
   const totalBudget = _budgetTotal(budget);
 
+  // Build export rows mirroring the rendered P&L table
+  const pnlExportRows = [
+    { account: "OPERATING REVENUE", mtd: null, mtdBudget: null, variance: null, variancePct: null, ytd: null },
+    { account: "Rooms Revenue",  mtd: actual.rooms?.revenue || 0, mtdBudget: budget.rooms?.revenue || 0, variance: (actual.rooms?.revenue||0) - (budget.rooms?.revenue||0), ytd: ytd.roomRev },
+    { account: "  Restaurant",   mtd: actual.fb?.restaurant || 0, mtdBudget: budget.fb?.restaurant || 0, variance: (actual.fb?.restaurant||0) - (budget.fb?.restaurant||0), ytd: ytd.fbRest },
+    { account: "  Bar / Lounge", mtd: actual.fb?.bar || 0, mtdBudget: budget.fb?.bar || 0, variance: (actual.fb?.bar||0) - (budget.fb?.bar||0), ytd: ytd.fbBar },
+    { account: "  Banquet",      mtd: actual.fb?.banquet || 0, mtdBudget: budget.fb?.banquet || 0, variance: (actual.fb?.banquet||0) - (budget.fb?.banquet||0), ytd: ytd.fbBanq },
+    { account: "Total F&B",      mtd: fbActual, mtdBudget: fbBudget, variance: fbActual - fbBudget, ytd: ytd.fbRest + ytd.fbBar + ytd.fbBanq },
+    { account: "  Parking",      mtd: actual.other?.parking || 0, mtdBudget: budget.other?.parking || 0, variance: (actual.other?.parking||0) - (budget.other?.parking||0), ytd: ytd.parking },
+    { account: "  Spa",          mtd: actual.other?.spa || 0,     mtdBudget: budget.other?.spa || 0,     variance: (actual.other?.spa||0) - (budget.other?.spa||0),         ytd: ytd.spa },
+    { account: "  Telephone",    mtd: actual.other?.telephone||0, mtdBudget: budget.other?.telephone||0, variance: (actual.other?.telephone||0) - (budget.other?.telephone||0), ytd: ytd.tele },
+    { account: "  Misc / Sundry",mtd: actual.other?.misc || 0,    mtdBudget: budget.other?.misc || 0,    variance: (actual.other?.misc||0) - (budget.other?.misc||0),       ytd: ytd.misc },
+    { account: "Total Other Revenue", mtd: otherActual, mtdBudget: otherBudget, variance: otherActual - otherBudget, ytd: ytd.parking + ytd.spa + ytd.tele + ytd.misc },
+    { account: "TOTAL OPERATING REVENUE", mtd: totalActual, mtdBudget: totalBudget, variance: totalActual - totalBudget, ytd: ytd.total },
+    { account: "TAX LIABILITIES (PASS-THROUGH)", mtd: null, mtdBudget: null, variance: null, ytd: null },
+    { account: "  Occupancy Tax", mtd: actual.taxes?.occupancy || 0, mtdBudget: 0, variance: actual.taxes?.occupancy || 0, ytd: ytd.occTax },
+    { account: "  Sales Tax",     mtd: actual.taxes?.sales || 0,     mtdBudget: 0, variance: actual.taxes?.sales || 0,     ytd: ytd.salesTax },
+    { account: "  Tourism Tax",   mtd: actual.taxes?.tourism || 0,   mtdBudget: 0, variance: actual.taxes?.tourism || 0,   ytd: ytd.tourismTax },
+  ];
+  const pnlExportColumns = [
+    { key: "account", label: "Account", width: 28 },
+    { key: "mtd",       label: "MTD Actual", money: true, width: 16 },
+    { key: "mtdBudget", label: "MTD Budget", money: true, width: 16 },
+    { key: "variance",  label: "Variance $", money: true, width: 16 },
+    { key: "ytd",       label: "YTD Actual", money: true, width: 18 },
+  ];
+
   return (
     <div className="p-8 space-y-5 max-w-7xl mx-auto">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -7881,6 +8359,22 @@ function PnlPane({ ctx }) {
           <select value={month} onChange={e => setMonth(e.target.value)} className="px-3 py-2 text-sm border border-stone-300 rounded-md bg-white font-medium tabular">
             {monthOptions.map(m => <option key={m} value={m}>{m}</option>)}
           </select>
+          <_ExportMenu
+            filename={`PL_${property?.name || "Property"}_${month}`}
+            title="Profit & Loss Statement"
+            subtitle={`Schedule of Operating Revenue · USALI · ${month}`}
+            propertyName={property?.name}
+            period={month}
+            summary={[
+              { label: "MTD Actual", value: fmtMoney(totalActual) },
+              { label: "MTD Budget", value: fmtMoney(totalBudget) },
+              { label: "Variance", value: fmtMoney(totalActual - totalBudget) },
+              { label: "YTD Actual", value: fmtMoney(ytd.total) },
+            ]}
+            footer={`HotelOps · ${property?.name || ""} · Period ${month}`}
+            columns={pnlExportColumns}
+            rows={pnlExportRows}
+          />
         </div>
       </div>
 
@@ -8353,6 +8847,29 @@ function TrendsPane({ ctx }) {
     return out.slice(0, 4);
   }, [chartData, pacing]);
 
+  const trendsExportRows = chartData.map((d) => ({
+    date: d.date,
+    revenue: d.revenue,
+    roomRev: d.roomRev,
+    rooms: d.rooms,
+    sold: d.sold,
+    occupancy: d.occupancy / 100,
+    adr: d.adr,
+    revpar: d.revpar,
+    budget: d.budget || 0,
+  }));
+  const trendsExportColumns = [
+    { key: "date", label: "Date", type: "date", width: 12 },
+    { key: "revenue", label: "Revenue", money: true, width: 14 },
+    { key: "roomRev", label: "Room Rev", money: true, width: 14 },
+    { key: "rooms", label: "Rooms Avail", type: "number", width: 12 },
+    { key: "sold", label: "Rooms Sold", type: "number", width: 12 },
+    { key: "occupancy", label: "Occupancy", pct: true, width: 12 },
+    { key: "adr", label: "ADR", money: true, width: 12 },
+    { key: "revpar", label: "RevPAR", money: true, width: 12 },
+    { key: "budget", label: "Daily Budget", money: true, width: 14 },
+  ];
+
   return (
     <div className="p-8 space-y-5 max-w-7xl mx-auto">
       <div className="flex items-center gap-3 flex-wrap">
@@ -8367,6 +8884,16 @@ function TrendsPane({ ctx }) {
             {accessibleProperties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         )}
+        <div className="ml-auto">
+          <_ExportMenu
+            filename={`Trends_${range}d`}
+            title="Revenue Trends"
+            subtitle={`Last ${range} days · ${propId === "all" ? "Portfolio" : accessibleProperties.find(p => p.id === propId)?.name || ""}`}
+            footer="HotelOps · Trends"
+            columns={trendsExportColumns}
+            rows={trendsExportRows}
+          />
+        </div>
       </div>
 
       {/* Pacing tiles */}
@@ -8545,6 +9072,37 @@ function ForecastPane({ ctx }) {
             <option value={14}>Next 14 days</option>
             <option value={30}>Next 30 days</option>
           </select>
+          <_ExportMenu
+            filename={`Forecast_${property?.name || ""}_${horizon}d`}
+            title="Forecast"
+            subtitle={`${property?.name || ""} · Next ${horizon} days · ${(summary.confidence * 100).toFixed(0)}% confidence`}
+            propertyName={property?.name}
+            summary={[
+              { label: "Next 7d Revenue", value: fmtMoney(summary.total7) },
+              { label: "Next 14d Revenue", value: fmtMoney(summary.total14) },
+              { label: "Avg Occupancy", value: fmtPct(summary.avgOcc) },
+              { label: "Trend", value: summary.trendDirection },
+            ]}
+            footer="HotelOps · Forecast"
+            columns={[
+              { key: "date", label: "Date", type: "date", width: 12 },
+              { key: "type", label: "Type", width: 10 },
+              { key: "revenue", label: "Revenue", money: true, width: 14 },
+              { key: "lower", label: "Low", money: true, width: 12 },
+              { key: "upper", label: "High", money: true, width: 12 },
+              { key: "occupancy", label: "Occupancy", pct: true, width: 12 },
+              { key: "adr", label: "ADR", money: true, width: 12 },
+            ]}
+            rows={points.map(p => ({
+              date: p.date,
+              type: p.isForecast ? "Forecast" : "Actual",
+              revenue: p.revenue,
+              lower: p.lower || "",
+              upper: p.upper || "",
+              occupancy: p.occupancy,
+              adr: p.adr,
+            }))}
+          />
         </div>
       </div>
 
