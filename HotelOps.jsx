@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, Fragment } from "react";
 import {
   Building2, Clock, Calendar, Users, DollarSign, FileText, BarChart3,
   Settings as SettingsIcon, LogOut, ChevronDown, Plus, Search, Edit2, Trash2,
@@ -40,6 +40,11 @@ import {
   bankAccounts as _bankAccounts,
   findAccount as _findAccount,
 } from "./src/lib/gl.js";
+import { ScheduleExportMenu as _ScheduleExportMenu } from "./src/lib/ScheduleExportMenu.jsx";
+import {
+  classifyDepartment as _classifyDepartment,
+  groupByDepartment as _groupByDepartment,
+} from "./src/lib/scheduleExport.js";
 
 /* =========================================================================
    FONTS + GLOBAL STYLE
@@ -2811,6 +2816,9 @@ function ScheduleModule({ ctx }) {
       .sort((a,b) => a.lastName.localeCompare(b.lastName));
   }, [state.employees, activeProperty, isStaff, currentUser.id]);
 
+  // Group by department for visual sectioning + export
+  const deptGroups = useMemo(() => _groupByDepartment(visibleEmployees, state.schedule || []), [visibleEmployees, state.schedule]);
+
   const getShift = (empId, date) => state.schedule.find(sc => sc.employeeId === empId && sc.date === iso(date));
   const getPto = (empId, date) => state.ptoRequests?.find(r =>
     r.employeeId === empId
@@ -2829,6 +2837,33 @@ function ScheduleModule({ ctx }) {
       if (hrs < 0) hrs += 24*60;
       return sum + hrs / 60;
     }, 0);
+  };
+
+  // Per-day total hours for a set of employees (used for dept subtotals)
+  const dayHoursForGroup = (employees) => days.map((d) => {
+    return employees.reduce((sum, emp) => {
+      const s = getShift(emp.id, d);
+      if (!s) return sum;
+      const [sh, sm] = s.startTime.split(":").map(Number);
+      const [eh, em] = s.endTime.split(":").map(Number);
+      let hrs = (eh*60 + em) - (sh*60 + sm);
+      if (hrs < 0) hrs += 24*60;
+      return sum + hrs / 60;
+    }, 0);
+  });
+
+  // Clipboard for copy/paste of shifts within the schedule
+  const [clip, setClip] = useState(null);
+  const pasteShift = (empId, dateStr) => {
+    if (!clip) return;
+    const existing = state.schedule.find(sc => sc.employeeId === empId && sc.date === dateStr);
+    if (existing) {
+      update({ schedule: state.schedule.map(sc => sc.id === existing.id ? { ...sc, startTime: clip.startTime, endTime: clip.endTime, position: clip.position } : sc) });
+    } else {
+      const emp = state.employees.find(e => e.id === empId);
+      update({ schedule: [...state.schedule, { id: newId("sc"), employeeId: empId, date: dateStr, startTime: clip.startTime, endTime: clip.endTime, position: clip.position, propertyId: emp?.propertyId || activeProperty }] });
+    }
+    toast?.push?.("Shift pasted", { tone: "success", duration: 1800 });
   };
 
   return (
@@ -2895,8 +2930,28 @@ function ScheduleModule({ ctx }) {
               <Plus size={14} />Add Shift
             </Button>
           )}
+          <_ScheduleExportMenu
+            employees={visibleEmployees}
+            schedule={state.schedule}
+            ptoRequests={state.ptoRequests}
+            days={days}
+            propertyName={state.properties.find(p => p.id === activeProperty)?.name}
+            weekLabel={`Week of ${fmtDate(days[0])} – ${fmtDate(days[6])}`}
+            filename={`Schedule_${(state.properties.find(p => p.id === activeProperty)?.name || "Property").replace(/\s+/g, "_")}_${iso(days[0])}`}
+          />
         </div>
       </div>
+
+      {clip && (
+        <div className="flex items-center gap-3 px-4 py-2 rounded-md border border-amber-300 bg-amber-50 text-sm">
+          <Paperclip size={14} className="text-amber-700" />
+          <span className="text-amber-900">
+            Shift on clipboard: <strong className="tabular">{clip.startTime}–{clip.endTime}</strong> · {clip.position || "no role"} ·
+            click any empty cell to paste
+          </span>
+          <button onClick={() => setClip(null)} className="ml-auto text-xs text-stone-600 hover:text-stone-900 underline">Clear</button>
+        </div>
+      )}
 
       <Card className="overflow-hidden">
         <div className="overflow-x-auto scroll-thin">
@@ -2922,54 +2977,96 @@ function ScheduleModule({ ctx }) {
               {visibleEmployees.length === 0 && (
                 <tr><td colSpan={9}><Empty icon={Users} title="No employees" message="Add hourly employees to start scheduling." /></td></tr>
               )}
-              {visibleEmployees.map(emp => {
-                const totalH = totalHoursPerEmployee(emp.id);
+              {deptGroups.map((group) => {
+                const dayTotals = dayHoursForGroup(group.employees);
+                const deptTotal = dayTotals.reduce((s, h) => s + h, 0);
                 return (
-                  <tr key={emp.id} className="hover:bg-stone-50">
-                    <td className="px-4 py-3 sticky left-0 bg-white z-10">
-                      <div className="flex items-center gap-3">
-                        <Avatar employee={emp} size={32} />
-                        <div className="min-w-0">
-                          <div className="font-medium text-stone-900 truncate">{fullName(emp)}</div>
-                          <div className="text-xs text-stone-500 truncate">{emp.title}</div>
-                        </div>
-                      </div>
-                    </td>
-                    {days.map((d, i) => {
-                      const sc = getShift(emp.id, d);
-                      const pto = getPto(emp.id, d);
-                      const isToday = iso(d) === iso(TODAY);
-                      return (
-                        <td key={i} className={`px-1.5 py-1.5 text-center align-top ${isToday ? "bg-amber-50/30" : ""}`}>
-                          {pto ? (
-                            <div className="w-full px-2 py-2 rounded text-xs bg-violet-100 text-violet-900 border border-violet-200" title={`Approved time off: ${pto.reason || pto.type}`}>
-                              <div className="font-medium">PTO</div>
-                              <div className="text-violet-700 mt-0.5 truncate text-[10px]">{pto.type}</div>
-                            </div>
-                          ) : sc ? (
-                            <button
-                              onClick={() => canEdit && setEditing(sc)}
-                              disabled={!canEdit}
-                              className={`w-full px-2 py-2 rounded text-xs ${canEdit ? "hover:ring-2 hover:ring-amber-700 cursor-pointer" : "cursor-default"} bg-amber-100 text-amber-900 border border-amber-200`}
-                            >
-                              <div className="font-medium tabular">{sc.startTime}–{sc.endTime}</div>
-                              <div className="text-amber-700 mt-0.5 truncate">{sc.position}</div>
-                            </button>
-                          ) : canEdit ? (
-                            <button
-                              onClick={() => setEditing({ isNew: true, employeeId: emp.id, date: iso(d) })}
-                              className="w-full py-2 rounded text-xs text-stone-400 border border-dashed border-stone-200 hover:border-amber-700 hover:text-amber-700"
-                            >
-                              <Plus size={12} className="inline" />
-                            </button>
-                          ) : (
-                            <span className="text-stone-300 text-xs">·</span>
-                          )}
+                  <Fragment key={group.department}>
+                    <tr className="bg-amber-50/50 border-y-2 border-amber-700">
+                      <td className="px-4 py-2 sticky left-0 bg-amber-50 z-10">
+                        <div className="text-[10px] uppercase tracking-[0.2em] text-amber-800 font-bold">{group.department}</div>
+                        <div className="text-xs text-stone-600">{group.employees.length} {group.employees.length === 1 ? "person" : "people"}</div>
+                      </td>
+                      {dayTotals.map((h, i) => (
+                        <td key={i} className="px-1.5 py-2 text-center text-xs tabular text-amber-900 font-semibold">
+                          {h > 0 ? `${h.toFixed(1)}h` : ""}
                         </td>
+                      ))}
+                      <td className="px-4 py-2 text-right tabular text-amber-900 font-bold">{deptTotal.toFixed(1)}h</td>
+                    </tr>
+                    {group.employees.map(emp => {
+                      const totalH = totalHoursPerEmployee(emp.id);
+                      return (
+                        <tr key={emp.id} className="hover:bg-stone-50">
+                          <td className="px-4 py-3 sticky left-0 bg-white z-10">
+                            <div className="flex items-center gap-3">
+                              <Avatar employee={emp} size={32} />
+                              <div className="min-w-0">
+                                <div className="font-medium text-stone-900 truncate">{fullName(emp)}</div>
+                                <div className="text-xs text-stone-500 truncate">{emp.title}</div>
+                              </div>
+                            </div>
+                          </td>
+                          {days.map((d, i) => {
+                            const sc = getShift(emp.id, d);
+                            const pto = getPto(emp.id, d);
+                            const isToday = iso(d) === iso(TODAY);
+                            const dStr = iso(d);
+                            return (
+                              <td key={i} className={`px-1.5 py-1.5 text-center align-top ${isToday ? "bg-amber-50/30" : ""}`}>
+                                {pto ? (
+                                  <div className="w-full px-2 py-2 rounded text-xs bg-violet-100 text-violet-900 border border-violet-200" title={`Approved time off: ${pto.reason || pto.type}`}>
+                                    <div className="font-medium">PTO</div>
+                                    <div className="text-violet-700 mt-0.5 truncate text-[10px]">{pto.type}</div>
+                                  </div>
+                                ) : sc ? (
+                                  <div className="relative group">
+                                    <button
+                                      onClick={() => canEdit && setEditing(sc)}
+                                      disabled={!canEdit}
+                                      className={`w-full px-2 py-2 rounded text-xs ${canEdit ? "hover:ring-2 hover:ring-amber-700 cursor-pointer" : "cursor-default"} bg-amber-100 text-amber-900 border border-amber-200`}
+                                    >
+                                      <div className="font-medium tabular">{sc.startTime}–{sc.endTime}</div>
+                                      <div className="text-amber-700 mt-0.5 truncate">{sc.position}</div>
+                                    </button>
+                                    {canEdit && (
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); setClip({ startTime: sc.startTime, endTime: sc.endTime, position: sc.position }); toast?.push?.("Shift copied — click an empty cell to paste", { tone: "info", duration: 2500 }); }}
+                                        className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-stone-700 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+                                        title="Copy this shift"
+                                      >
+                                        <Paperclip size={9} />
+                                      </button>
+                                    )}
+                                  </div>
+                                ) : canEdit ? (
+                                  clip ? (
+                                    <button
+                                      onClick={() => pasteShift(emp.id, dStr)}
+                                      className="w-full py-2 rounded text-xs text-amber-700 border border-dashed border-amber-400 bg-amber-50/40 hover:bg-amber-100"
+                                      title={`Paste ${clip.startTime}–${clip.endTime}`}
+                                    >
+                                      Paste
+                                    </button>
+                                  ) : (
+                                    <button
+                                      onClick={() => setEditing({ isNew: true, employeeId: emp.id, date: dStr })}
+                                      className="w-full py-2 rounded text-xs text-stone-400 border border-dashed border-stone-200 hover:border-amber-700 hover:text-amber-700"
+                                    >
+                                      <Plus size={12} className="inline" />
+                                    </button>
+                                  )
+                                ) : (
+                                  <span className="text-stone-300 text-xs">·</span>
+                                )}
+                              </td>
+                            );
+                          })}
+                          <td className="px-4 py-3 text-right tabular font-medium text-stone-900">{totalH.toFixed(1)}h</td>
+                        </tr>
                       );
                     })}
-                    <td className="px-4 py-3 text-right tabular font-medium text-stone-900">{totalH.toFixed(1)}h</td>
-                  </tr>
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -2984,7 +3081,21 @@ function ScheduleModule({ ctx }) {
           activeProperty={activeProperty}
           onClose={() => setEditing(null)}
           onSave={(data) => {
-            if (editing.isNew) {
+            if (data?.__bulk && Array.isArray(data.drafts)) {
+              // Bulk: skip employee/date pairs that already have a shift; replace would be destructive
+              const existingKeys = new Set(state.schedule.map(sc => `${sc.employeeId}::${sc.date}`));
+              const fresh = data.drafts
+                .filter(d => !existingKeys.has(`${d.employeeId}::${d.date}`))
+                .map(d => ({ id: newId("sc"), ...d }));
+              const skipped = data.drafts.length - fresh.length;
+              if (fresh.length) {
+                update({ schedule: [...state.schedule, ...fresh] });
+              }
+              const msg = skipped > 0
+                ? `Saved ${fresh.length} shifts · ${skipped} day${skipped === 1 ? "" : "s"} already had a shift`
+                : `Saved ${fresh.length} shifts`;
+              toast?.push?.(msg, { tone: fresh.length ? "success" : "warn" });
+            } else if (editing.isNew) {
               const newEntry = { id: newId("sc"), ...data };
               update({ schedule: [...state.schedule, newEntry] });
             } else {
@@ -3011,21 +3122,98 @@ function ScheduleEditModal({ entry, state, activeProperty, onClose, onSave, onDe
   const [startTime, setStartTime] = useState(entry.startTime || "08:00");
   const [endTime, setEndTime] = useState(entry.endTime || "16:00");
   const [position, setPosition] = useState(entry.position || "");
+  // Multi-day add: bitmask of selected day-of-week (Sun=0). Default: only the selected date's DOW.
+  const initialDow = useMemo(() => {
+    if (!isNew) return null;
+    const d = new Date(date);
+    const set = new Set([d.getDay()]);
+    return set;
+  }, []);
+  const [dows, setDows] = useState(initialDow);
 
+  // Derive department from chosen employee + position so the user sees it explicitly
   const employees = state.employees.filter(e => e.propertyId === activeProperty && e.hourlyRate > 0);
   const employeeOptions = employees.map(e => ({ value: e.id, label: `${fullName(e)} (${e.title})` }));
-  const positions = ["Front Desk Agent", "Front Desk Lead", "Night Auditor", "Room Attendant", "Executive Housekeeper", "Maintenance", "Chief Engineer"];
+  const selectedEmp = employees.find(e => e.id === employeeId);
+  const detectedDept = _classifyDepartment(position || selectedEmp?.title || "");
+  const positions = ["Front Desk Agent", "Front Desk Lead", "Night Auditor", "Room Attendant", "Executive Housekeeper", "Maintenance", "Chief Engineer", "Server", "Bartender", "Cook", "Banquet Server", "Host", "Dishwasher", "Sales Manager", "Reservations Agent", "Spa Therapist", "Security Officer"];
+
+  const toggleDow = (d) => {
+    const next = new Set(dows);
+    if (next.has(d)) next.delete(d); else next.add(d);
+    setDows(next);
+  };
+
+  // For multi-day save, generate a list of dates in the same Sun-Sat week as `date` whose DOW is selected
+  const targetDates = useMemo(() => {
+    if (!isNew || !dows) return [date];
+    const anchor = new Date(date);
+    const startOfWeek = new Date(anchor);
+    startOfWeek.setDate(anchor.getDate() - anchor.getDay());
+    const out = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(startOfWeek); d.setDate(startOfWeek.getDate() + i);
+      if (dows.has(d.getDay())) out.push(iso(d));
+    }
+    return out.length ? out : [date];
+  }, [date, dows, isNew]);
 
   return (
-    <Modal open onClose={onClose} title={isNew ? "Add Shift" : "Edit Shift"}>
+    <Modal open onClose={onClose} title={isNew ? "Add Shift" : "Edit Shift"} size="lg">
       <div className="space-y-4">
-        <Select label="Employee" value={employeeId} onChange={setEmployeeId} options={[{ value: "", label: "Select employee…" }, ...employeeOptions]} />
-        <Input label="Date" type="date" value={date} onChange={setDate} />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Select label="Employee" value={employeeId} onChange={setEmployeeId} options={[{ value: "", label: "Select employee…" }, ...employeeOptions]} />
+          <Input label="Anchor Date" type="date" value={date} onChange={setDate} />
+        </div>
         <div className="grid grid-cols-2 gap-4">
           <Input label="Start Time" type="time" value={startTime} onChange={setStartTime} />
           <Input label="End Time" type="time" value={endTime} onChange={setEndTime} />
         </div>
-        <Select label="Position" value={position} onChange={setPosition} options={[{ value: "", label: "Select position…" }, ...positions.map(p => ({ value: p, label: p }))]} />
+        <div>
+          <label className="block">
+            <span className="block text-xs uppercase tracking-wider text-stone-500 mb-1.5 font-medium">Position</span>
+            <input
+              list="hotelops-positions"
+              value={position}
+              onChange={e => setPosition(e.target.value)}
+              placeholder="Type or pick a role…"
+              className="w-full px-3 py-2 text-sm border border-stone-300 rounded-md bg-white focus:border-amber-700 focus:outline-none focus:ring-1 focus:ring-amber-700"
+            />
+            <datalist id="hotelops-positions">
+              {positions.map(p => <option key={p} value={p} />)}
+            </datalist>
+          </label>
+          {position && (
+            <div className="text-[11px] text-stone-500 mt-1">Department: <Badge color="amber">{detectedDept}</Badge></div>
+          )}
+        </div>
+
+        {isNew && (
+          <div>
+            <span className="block text-xs uppercase tracking-wider text-stone-500 mb-1.5 font-medium">Apply to days · {targetDates.length} day{targetDates.length === 1 ? "" : "s"} this week</span>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map((d, i) => {
+                const active = dows?.has(i);
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => toggleDow(i)}
+                    className={`px-3 py-1.5 rounded-md text-xs font-semibold border transition-colors ${active ? "bg-amber-700 text-white border-amber-800" : "bg-white text-stone-700 border-stone-300 hover:border-amber-400"}`}
+                  >
+                    {d}
+                  </button>
+                );
+              })}
+              <span className="text-stone-300 mx-1">·</span>
+              <button type="button" onClick={() => setDows(new Set([1,2,3,4,5]))} className="text-[11px] font-semibold text-amber-700 hover:underline">Weekdays</button>
+              <button type="button" onClick={() => setDows(new Set([0,6]))} className="text-[11px] font-semibold text-amber-700 hover:underline">Weekend</button>
+              <button type="button" onClick={() => setDows(new Set([0,1,2,3,4,5,6]))} className="text-[11px] font-semibold text-amber-700 hover:underline">All</button>
+              <button type="button" onClick={() => setDows(new Set([new Date(date).getDay()]))} className="text-[11px] font-semibold text-stone-500 hover:underline">Just anchor</button>
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center justify-between pt-3 border-t border-stone-200">
           {!isNew ? (
             <Button variant="danger" size="sm" onClick={onDelete}><Trash2 size={14} />Remove</Button>
@@ -3033,11 +3221,18 @@ function ScheduleEditModal({ entry, state, activeProperty, onClose, onSave, onDe
           <div className="flex gap-2">
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
             <Button variant="primary" disabled={!employeeId || !position}
-              onClick={() => onSave({
-                employeeId, date, startTime, endTime, position,
-                propertyId: state.employees.find(e => e.id === employeeId)?.propertyId || activeProperty,
-              })}>
-              <Save size={14} />Save
+              onClick={() => {
+                const propertyId = state.employees.find(e => e.id === employeeId)?.propertyId || activeProperty;
+                if (isNew && targetDates.length > 1) {
+                  onSave({
+                    __bulk: true,
+                    drafts: targetDates.map(d => ({ employeeId, date: d, startTime, endTime, position, propertyId })),
+                  });
+                } else {
+                  onSave({ employeeId, date, startTime, endTime, position, propertyId });
+                }
+              }}>
+              <Save size={14} />{isNew && targetDates.length > 1 ? `Save ${targetDates.length} shifts` : "Save"}
             </Button>
           </div>
         </div>
