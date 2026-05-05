@@ -1,0 +1,31 @@
+# Build output
+dist/
+release/
+out/
+
+# Dependencies
+node_modules/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
+*.tmp
+*.swp
+
+# Local environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Electron build cache
+.cache/
+
+# Misc
+*.pid
+.eslintcache
+
+# Claude Code local
+.claude/

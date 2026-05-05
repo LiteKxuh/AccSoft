@@ -1,0 +1,136 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; }
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Premium scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgba(120,113,108,0.35); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(120,113,108,0.55); background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+.dark ::-webkit-scrollbar-thumb { background: rgba(168,162,158,0.25); background-clip: content-box; }
+
+/* =================================================================
+   Dark mode overlay
+   The original component tree uses hard-coded stone-* utilities.
+   Rather than adding dark: variants to thousands of classes, we
+   override the most visible surface colors here so toggling .dark
+   on <html> produces a polished, intentional dark experience.
+   ================================================================= */
+.dark body { background: #0c0a09 !important; }
+
+/* App backgrounds */
+.dark .bg-stone-50 { background-color: #1c1917 !important; }
+.dark .bg-white   { background-color: #1c1917 !important; }
+
+/* Cards / borders */
+.dark .border-stone-100 { border-color: #292524 !important; }
+.dark .border-stone-200 { border-color: #292524 !important; }
+.dark .border-stone-300 { border-color: #44403c !important; }
+.dark .divide-stone-100 > * + * { border-top-color: #292524 !important; }
+.dark .divide-amber-100 > * + * { border-top-color: #422a06 !important; }
+
+/* Text colors */
+.dark .text-stone-900 { color: #f5f5f4 !important; }
+.dark .text-stone-700 { color: #d6d3d1 !important; }
+.dark .text-stone-600 { color: #a8a29e !important; }
+.dark .text-stone-500 { color: #a8a29e !important; }
+.dark .text-stone-400 { color: #78716c !important; }
+
+/* Tinted surfaces — keep brand color but dim */
+.dark .bg-stone-100 { background-color: #292524 !important; }
+.dark .bg-amber-50  { background-color: rgba(180, 83, 9, 0.08) !important; }
+.dark .bg-emerald-50 { background-color: rgba(16, 185, 129, 0.08) !important; }
+.dark .bg-rose-50   { background-color: rgba(244, 63, 94, 0.08) !important; }
+.dark .bg-violet-50 { background-color: rgba(124, 58, 237, 0.08) !important; }
+.dark .bg-sky-50    { background-color: rgba(14, 165, 233, 0.08) !important; }
+
+/* Hover states */
+.dark .hover\:bg-stone-50:hover  { background-color: #292524 !important; }
+.dark .hover\:bg-stone-100:hover { background-color: #44403c !important; }
+.dark .hover\:bg-stone-800:hover { background-color: #292524 !important; }
+.dark .hover\:text-stone-900:hover { color: #f5f5f4 !important; }
+
+/* Inputs */
+.dark input, .dark textarea, .dark select {
+  background-color: #1c1917 !important;
+  color: #f5f5f4 !important;
+  border-color: #44403c !important;
+}
+.dark input::placeholder, .dark textarea::placeholder { color: #78716c !important; }
+
+/* Tables */
+.dark table thead { background-color: #1c1917 !important; }
+.dark table tbody tr:hover { background-color: rgba(180, 83, 9, 0.06) !important; }
+
+/* Soft "from-stone-50" gradients */
+.dark .from-stone-50 { --tw-gradient-from: #1c1917 var(--tw-gradient-from-position) !important; }
+.dark .to-white { --tw-gradient-to: #0c0a09 var(--tw-gradient-to-position) !important; }
+.dark .from-amber-50 { --tw-gradient-from: rgba(180, 83, 9, 0.10) var(--tw-gradient-from-position) !important; }
+
+/* Sidebar override — sidebar already uses stone-900 inline so just tint */
+.dark aside { background: #0c0a09 !important; }
+
+/* Recharts grid lines a bit subtler in dark mode */
+.dark .recharts-cartesian-grid line { stroke: #292524 !important; }
+.dark .recharts-cartesian-axis-line { stroke: #44403c !important; }
+.dark .recharts-cartesian-axis-tick-line { stroke: #44403c !important; }
+.dark .recharts-cartesian-axis-tick-value { fill: #a8a29e !important; }
+.dark .recharts-default-tooltip {
+  background-color: #292524 !important;
+  border-color: #44403c !important;
+  color: #f5f5f4 !important;
+}
+.dark .recharts-tooltip-label,
+.dark .recharts-tooltip-item { color: #f5f5f4 !important; }
+.dark .recharts-legend-item-text { color: #d6d3d1 !important; }
+
+/* =================================================================
+   Print stylesheet — clean printable P&L, Flash Report, Reports
+   ================================================================= */
+@media print {
+  body { background: white !important; }
+  /* Hide nav chrome */
+  aside,
+  .print\:hide,
+  button[title*="Toggle dark"],
+  button[title*="command palette"],
+  .recharts-tooltip-wrapper { display: none !important; }
+  /* Top bar — strip down */
+  main > div:first-child {
+    border: none !important;
+    padding: 0 0 1rem 0 !important;
+  }
+  main > div:first-child > div:last-child { display: none !important; }
+  /* Cards become flat */
+  .bg-white,
+  [class*="bg-stone-"] {
+    box-shadow: none !important;
+    border-color: #e7e5e4 !important;
+  }
+  /* Hero panels — kill the dark backgrounds */
+  [style*="linear-gradient(135deg, #1c1917"],
+  [style*="linear-gradient(135deg, #1c1917 0%"] {
+    background: white !important;
+    color: #1c1917 !important;
+  }
+  [style*="linear-gradient(135deg, #1c1917"] * {
+    color: #1c1917 !important;
+  }
+  /* Avoid breaking tables across pages */
+  table { page-break-inside: auto; }
+  tr { page-break-inside: avoid; page-break-after: auto; }
+  thead { display: table-header-group; }
+  /* Larger margins for print */
+  @page { margin: 0.5in; }
+  /* Force charts to render light */
+  .recharts-cartesian-axis-tick-value { fill: #44403c !important; }
+}
+
