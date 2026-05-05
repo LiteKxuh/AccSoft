@@ -26,6 +26,7 @@ Thumbs.db
 # Misc
 *.pid
 .eslintcache
+Screenshot/
 
 # Claude Code local
 .claude/

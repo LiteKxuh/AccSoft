@@ -1,23 +1,12 @@
 {
   "name": "HotelOps",
   "short_name": "HotelOps",
-  "description": "Premium hotel accounting, daily flash, payroll & operations.",
+  "description": "Premium hotel back-office: accounting, payroll, scheduling, and night-audit ingestion.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#1c1917",
-  "theme_color": "#1c1917",
+  "theme_color": "#b45309",
   "icons": [
-    {
-      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='40' fill='%23b45309'/%3E%3Cpath d='M58 134V58h15v29h46V58h15v76h-15v-34H73v34z' fill='white'/%3E%3C/svg%3E",
-      "sizes": "192x192",
-      "type": "image/svg+xml",
-      "purpose": "any"
-    },
-    {
-      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='100' fill='%23b45309'/%3E%3Cpath d='M154 358V154h40v77h124v-77h40v204h-40v-89H194v89z' fill='white'/%3E%3C/svg%3E",
-      "sizes": "512x512",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
-    }
+    { "src": "/icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ]
 }

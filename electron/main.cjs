@@ -11,7 +11,23 @@ const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 
 let mainWindow = null;
 
+function resolveAppIcon() {
+  // BuildResources copies sit at <resources>/icon.* in the packaged app.
+  // In dev they live in the repo's build-resources/ folder.
+  const candidates = [
+    path.join(process.resourcesPath || "", "icon.ico"),
+    path.join(process.resourcesPath || "", "icon.png"),
+    path.join(__dirname, "..", "build-resources", "icon.ico"),
+    path.join(__dirname, "..", "build-resources", "icon.png"),
+  ];
+  for (const c of candidates) {
+    try { if (c && require("node:fs").existsSync(c)) return c; } catch {}
+  }
+  return undefined;
+}
+
 function createMainWindow() {
+  const iconPath = resolveAppIcon();
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -20,6 +36,7 @@ function createMainWindow() {
     backgroundColor: "#1c1917",
     title: "HotelOps",
     show: false,
+    icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
