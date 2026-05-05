@@ -90,250 +90,29 @@ const TODAY = new Date();
 const iso = (d) => d.toISOString().slice(0, 10);
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 
+// HotelOps starts EMPTY. The very first launch routes the user through a
+// SetupWizard that creates the owner account and the first property.
+// All subsequent data — employees, shifts, schedule, reports, vendors,
+// invoices, etc. — is entered by the user (or ingested from a night-audit).
 const SEED = {
-  properties: [
-    { id: "p1", name: "Riverbend Inn", location: "Pine Bluff, AR", rooms: 84, type: "Limited Service" },
-    { id: "p2", name: "Cypress Point Lodge", location: "Hot Springs, AR", rooms: 142, type: "Full Service" },
-  ],
-  employees: [
-    { id: "e1", firstName: "Marcus", lastName: "Williams", role: "admin", title: "Regional Director", email: "marcus.w@hotelops.demo", phone: "(870) 555-0101", propertyId: "p1", propertyAccess: ["p1","p2"], hourlyRate: 0, salary: 92000, hireDate: "2019-06-10", status: "active", ssnLast4: "8821", emergency: "K. Williams · (870) 555-0102" },
-    { id: "e2", firstName: "Sarah", lastName: "Chen", role: "manager", title: "General Manager", email: "sarah.c@hotelops.demo", phone: "(870) 555-0103", propertyId: "p1", propertyAccess: ["p1"], hourlyRate: 0, salary: 64000, hireDate: "2022-03-15", status: "active", ssnLast4: "4521", emergency: "James Chen · (870) 555-0143" },
-    { id: "e3", firstName: "Diego", lastName: "Reyes", role: "manager", title: "General Manager", email: "diego.r@hotelops.demo", phone: "(501) 555-0104", propertyId: "p2", propertyAccess: ["p2"], hourlyRate: 0, salary: 71000, hireDate: "2021-09-02", status: "active", ssnLast4: "9034", emergency: "Mariana Reyes · (501) 555-0105" },
-    { id: "e4", firstName: "Aisha", lastName: "Patel", role: "front_desk", title: "Front Desk Lead", email: "aisha.p@hotelops.demo", phone: "(870) 555-0106", propertyId: "p1", propertyAccess: ["p1"], hourlyRate: 19.50, hireDate: "2023-01-22", status: "active", ssnLast4: "2210", emergency: "Raj Patel · (870) 555-0107" },
-    { id: "e5", firstName: "Tyler", lastName: "Brooks", role: "front_desk", title: "Front Desk Agent", email: "tyler.b@hotelops.demo", phone: "(870) 555-0108", propertyId: "p1", propertyAccess: ["p1"], hourlyRate: 16.25, hireDate: "2024-05-11", status: "active", ssnLast4: "7733", emergency: "S. Brooks · (870) 555-0109" },
-    { id: "e6", firstName: "Marisol", lastName: "Fuentes", role: "housekeeping", title: "Executive Housekeeper", email: "marisol.f@hotelops.demo", phone: "(870) 555-0110", propertyId: "p1", propertyAccess: ["p1"], hourlyRate: 21.00, hireDate: "2020-11-04", status: "active", ssnLast4: "5512", emergency: "Carlos Fuentes · (870) 555-0111" },
-    { id: "e7", firstName: "Kenji", lastName: "Tanaka", role: "housekeeping", title: "Room Attendant", email: "kenji.t@hotelops.demo", phone: "(870) 555-0112", propertyId: "p1", propertyAccess: ["p1"], hourlyRate: 15.75, hireDate: "2024-09-18", status: "active", ssnLast4: "1108", emergency: "Y. Tanaka · (870) 555-0113" },
-    { id: "e8", firstName: "Beatrice", lastName: "Okonkwo", role: "front_desk", title: "Night Auditor", email: "beatrice.o@hotelops.demo", phone: "(501) 555-0114", propertyId: "p2", propertyAccess: ["p2"], hourlyRate: 20.50, hireDate: "2022-08-29", status: "active", ssnLast4: "6644", emergency: "C. Okonkwo · (501) 555-0115" },
-    { id: "e9", firstName: "Robert", lastName: "Hayes", role: "maintenance", title: "Chief Engineer", email: "robert.h@hotelops.demo", phone: "(501) 555-0116", propertyId: "p2", propertyAccess: ["p2"], hourlyRate: 26.00, hireDate: "2018-04-12", status: "active", ssnLast4: "3398", emergency: "L. Hayes · (501) 555-0117" },
-    { id: "e10", firstName: "Chloe", lastName: "Martin", role: "housekeeping", title: "Room Attendant", email: "chloe.m@hotelops.demo", phone: "(501) 555-0118", propertyId: "p2", propertyAccess: ["p2"], hourlyRate: 16.00, hireDate: "2024-02-06", status: "active", ssnLast4: "0091", emergency: "P. Martin · (501) 555-0119" },
-    { id: "e11", firstName: "Devon", lastName: "Carter", role: "front_desk", title: "Front Desk Agent", email: "devon.c@hotelops.demo", phone: "(501) 555-0120", propertyId: "p2", propertyAccess: ["p2"], hourlyRate: 17.00, hireDate: "2023-10-30", status: "active", ssnLast4: "8821", emergency: "T. Carter · (501) 555-0121" },
-    { id: "e12", firstName: "Linda", lastName: "Zhao", role: "housekeeping", title: "Room Attendant", email: "linda.z@hotelops.demo", phone: "(501) 555-0122", propertyId: "p2", propertyAccess: ["p2"], hourlyRate: 15.75, hireDate: "2024-06-14", status: "active", ssnLast4: "4477", emergency: "W. Zhao · (501) 555-0123" },
-  ],
-  shifts: [], // generated below
-  schedule: [], // generated below
-  writeups: [
-    { id: "w1", employeeId: "e12", type: "verbal", date: iso(addDays(TODAY, -18)), issue: "Tardiness", description: "Arrived 32 minutes late to scheduled 8:00 AM shift without prior notification.", actionTaken: "Verbal counseling on attendance policy. Reviewed expectations.", issuedBy: "e3", acknowledged: true, acknowledgedDate: iso(addDays(TODAY, -18)) },
-    { id: "w2", employeeId: "e12", type: "written", date: iso(addDays(TODAY, -4)), issue: "Repeated Tardiness", description: "Second tardiness incident within 30 days. Arrived 18 minutes late.", actionTaken: "Written warning. Next incident will result in final warning per attendance policy section 4.2.", issuedBy: "e3", acknowledged: false, acknowledgedDate: null },
-    { id: "w3", employeeId: "e7", type: "verbal", date: iso(addDays(TODAY, -45)), issue: "Uniform Compliance", description: "Reported to shift without name badge.", actionTaken: "Verbal reminder of uniform standards.", issuedBy: "e2", acknowledged: true, acknowledgedDate: iso(addDays(TODAY, -45)) },
-  ],
-  documents: [
-    { id: "d1", employeeId: "e2", name: "I-9 Employment Eligibility.pdf", category: "Onboarding", uploadDate: "2022-03-15", size: "342 KB" },
-    { id: "d2", employeeId: "e2", name: "W-4 Federal Tax Withholding.pdf", category: "Tax Forms", uploadDate: "2022-03-15", size: "188 KB" },
-    { id: "d3", employeeId: "e2", name: "Direct Deposit Authorization.pdf", category: "Payroll", uploadDate: "2022-03-15", size: "94 KB" },
-    { id: "d4", employeeId: "e2", name: "Employee Handbook Acknowledgment.pdf", category: "Onboarding", uploadDate: "2022-03-15", size: "112 KB" },
-    { id: "d5", employeeId: "e2", name: "2024 Annual Review.pdf", category: "Performance", uploadDate: "2024-12-10", size: "267 KB" },
-    { id: "d6", employeeId: "e4", name: "I-9 Employment Eligibility.pdf", category: "Onboarding", uploadDate: "2023-01-22", size: "338 KB" },
-    { id: "d7", employeeId: "e4", name: "W-4 Federal Tax Withholding.pdf", category: "Tax Forms", uploadDate: "2023-01-22", size: "192 KB" },
-    { id: "d8", employeeId: "e4", name: "Front Desk Certification.pdf", category: "Training", uploadDate: "2023-04-08", size: "421 KB" },
-    { id: "d9", employeeId: "e12", name: "I-9 Employment Eligibility.pdf", category: "Onboarding", uploadDate: "2024-06-14", size: "344 KB" },
-    { id: "d10", employeeId: "e12", name: "W-4 Federal Tax Withholding.pdf", category: "Tax Forms", uploadDate: "2024-06-14", size: "186 KB" },
-    { id: "d11", employeeId: "e6", name: "Executive Housekeeper Contract.pdf", category: "Onboarding", uploadDate: "2020-11-04", size: "512 KB" },
-    { id: "d12", employeeId: "e9", name: "HVAC Certification.pdf", category: "Training", uploadDate: "2018-05-22", size: "289 KB" },
-  ],
-  reports: [], // generated below
-  budgets: [], // generated below
-  activity: [], // generated below — audit log
-  closedPeriods: [], // [{ propertyId, month, closedAt, closedBy, notes }]
-  ptoRequests: [], // generated below — PTO / time-off requests
-  vendors: [
-    { id: "v1", name: "Sysco Foods", category: "Food & Beverage", terms: "Net 30", contact: "ar@sysco.com" },
-    { id: "v2", name: "Cintas Uniforms", category: "Operations", terms: "Net 30", contact: "billing@cintas.com" },
-    { id: "v3", name: "American Hotel Register", category: "Guest Supplies", terms: "Net 30", contact: "ap@ahr.com" },
-    { id: "v4", name: "Pine Bluff Power & Water", category: "Utilities", terms: "Net 15", contact: "billing@pbpw.org" },
-    { id: "v5", name: "Otis Elevator Service", category: "Maintenance", terms: "Net 30", contact: "service@otis.com" },
-    { id: "v6", name: "Ecolab Sanitation", category: "Operations", terms: "Net 30", contact: "ar@ecolab.com" },
-    { id: "v7", name: "Comcast Business", category: "Utilities", terms: "Net 30", contact: "biz@comcast.com" },
-    { id: "v8", name: "Riverbend Linen Co.", category: "Housekeeping", terms: "Net 30", contact: "ap@rblc.com" },
-  ],
-  invoices: [], // generated below
+  properties: [],
+  employees: [],
+  shifts: [],
+  schedule: [],
+  writeups: [],
+  documents: [],
+  reports: [],
+  budgets: [],
+  activity: [],
+  closedPeriods: [],
+  ptoRequests: [],
+  vendors: [],
+  invoices: [],
+  payrollRuns: [],          // [{ id, propertyId, periodStart, periodEnd, runDate, runBy, lines: [...] }]
+  taxFilings: [],           // user-tracked filings
+  contractors: [],          // 1099-NEC payees (separate from employees)
+  contractorPayments: [],   // [{ id, contractorId, propertyId, date, amount, memo }]
 };
-
-// Generate shifts (last 14 days)
-(function generateShifts() {
-  const hourlyEmployees = SEED.employees.filter(e => e.hourlyRate > 0);
-  let id = 1;
-  for (let day = 14; day >= 1; day--) {
-    const date = addDays(TODAY, -day);
-    hourlyEmployees.forEach(emp => {
-      // ~85% likelihood of working any given day
-      if (Math.random() > 0.15) {
-        const startHour = emp.role === "front_desk" && emp.title.includes("Night") ? 23 : (Math.random() < 0.5 ? 7 : 15);
-        const startMin = Math.floor(Math.random() * 15);
-        const shiftLen = 7.5 + Math.random() * 1.5;
-        const inDate = new Date(date);
-        inDate.setHours(startHour, startMin, Math.floor(Math.random()*60));
-        const outDate = new Date(inDate.getTime() + shiftLen * 3600 * 1000);
-        SEED.shifts.push({
-          id: `s${id++}`,
-          employeeId: emp.id,
-          propertyId: emp.propertyId,
-          clockIn: inDate.toISOString(),
-          clockOut: outDate.toISOString(),
-          breakMinutes: 30,
-          notes: "",
-          edited: false,
-          editedBy: null,
-        });
-      }
-    });
-  }
-})();
-
-// Generate schedule (this week + next week)
-(function generateSchedule() {
-  const day = TODAY.getDay();
-  const startOfWeek = addDays(TODAY, -day);
-  const hourlyEmployees = SEED.employees.filter(e => e.hourlyRate > 0);
-  let id = 1;
-  for (let w = 0; w < 2; w++) {
-    for (let d = 0; d < 7; d++) {
-      const date = addDays(startOfWeek, w*7 + d);
-      hourlyEmployees.forEach(emp => {
-        if (Math.random() > 0.25) {
-          const isNight = emp.title.includes("Night");
-          const startTime = isNight ? "23:00" : (Math.random() < 0.5 ? "07:00" : "15:00");
-          const endTime = isNight ? "07:00" : (startTime === "07:00" ? "15:00" : "23:00");
-          SEED.schedule.push({
-            id: `sc${id++}`,
-            employeeId: emp.id,
-            propertyId: emp.propertyId,
-            date: iso(date),
-            startTime,
-            endTime,
-            position: emp.title,
-          });
-        }
-      });
-    }
-  }
-})();
-
-// Generate daily reports (last 30 days)
-(function generateReports() {
-  let id = 1;
-  SEED.properties.forEach(prop => {
-    for (let day = 30; day >= 1; day--) {
-      const date = addDays(TODAY, -day);
-      const isWeekend = [5,6].includes(date.getDay());
-      const occBase = isWeekend ? 0.78 : 0.65;
-      const occupancy = Math.min(0.98, occBase + (Math.random() - 0.5) * 0.25);
-      const roomsSold = Math.round(prop.rooms * occupancy);
-      const adr = prop.type === "Full Service" ? 165 + Math.random()*45 : 118 + Math.random()*28;
-      const roomRevenue = roomsSold * adr;
-      const fbRevenue = prop.type === "Full Service" ? roomsSold * (28 + Math.random()*22) : roomsSold * (4 + Math.random()*8);
-      const otherRevenue = roomsSold * (3 + Math.random()*8);
-      SEED.reports.push({
-        id: `r${id++}`,
-        date: iso(date),
-        propertyId: prop.id,
-        roomsSold,
-        roomsAvailable: prop.rooms,
-        occupancy: roomsSold / prop.rooms,
-        adr: Math.round(adr * 100) / 100,
-        revpar: Math.round((roomRevenue / prop.rooms) * 100) / 100,
-        roomRevenue: Math.round(roomRevenue * 100) / 100,
-        fbRevenue: Math.round(fbRevenue * 100) / 100,
-        otherRevenue: Math.round(otherRevenue * 100) / 100,
-        totalRevenue: Math.round((roomRevenue + fbRevenue + otherRevenue) * 100) / 100,
-        notes: "",
-      });
-    }
-  });
-})();
-
-// Auto-seed forward-looking budgets from the seeded report history
-SEED.budgets = _autoSeedBudgets(SEED.properties, SEED.reports, 0.06, 3);
-
-// Generate a few PTO requests so the module has data on first run
-(function generatePto() {
-  let id = 1;
-  const hourly = SEED.employees.filter(e => e.hourlyRate > 0);
-  // 3 historical (mix of approved/denied), 2 upcoming (pending), 1 upcoming approved
-  const seedReqs = [
-    { offset: -10, days: 3, status: "approved", reason: "Family event" },
-    { offset: -25, days: 5, status: "approved", reason: "Vacation" },
-    { offset: -40, days: 2, status: "denied", reason: "Personal time" },
-    { offset: 12, days: 4, status: "pending", reason: "Vacation — already booked flights" },
-    { offset: 30, days: 2, status: "pending", reason: "Wedding out of state" },
-    { offset: 18, days: 5, status: "approved", reason: "Anniversary trip" },
-  ];
-  seedReqs.forEach((r, i) => {
-    const emp = hourly[i % hourly.length];
-    const start = addDays(TODAY, r.offset);
-    const end = addDays(start, r.days - 1);
-    SEED.ptoRequests.push({
-      id: `pto${id++}`,
-      employeeId: emp.id,
-      startDate: iso(start),
-      endDate: iso(end),
-      hours: r.days * 8,
-      type: "vacation",
-      reason: r.reason,
-      status: r.status,
-      requestedAt: iso(addDays(TODAY, r.offset - 7)),
-      reviewedBy: r.status !== "pending" ? SEED.employees.find(e => e.role === "manager" && e.propertyId === emp.propertyId)?.id : null,
-      reviewedAt: r.status !== "pending" ? iso(addDays(TODAY, r.offset - 5)) : null,
-      reviewNotes: r.status === "denied" ? "Holiday weekend — cannot approve, please re-submit for a different date." : null,
-    });
-  });
-})();
-
-// Generate sample invoices over the last 60 days for AP module realism
-(function generateInvoices() {
-  let id = 1;
-  const today = TODAY;
-  SEED.properties.forEach(prop => {
-    SEED.vendors.forEach(v => {
-      // Each vendor invoices 1-3 times across the window
-      const n = 1 + Math.floor(Math.random() * 3);
-      for (let i = 0; i < n; i++) {
-        const daysAgo = Math.floor(Math.random() * 60);
-        const issued = addDays(today, -daysAgo);
-        const termsDays = v.terms === "Net 15" ? 15 : 30;
-        const dueDate = addDays(issued, termsDays);
-        const baseAmount =
-          v.category === "Food & Beverage" ? 800 + Math.random() * 4500 :
-          v.category === "Utilities" ? 1200 + Math.random() * 3500 :
-          v.category === "Maintenance" ? 350 + Math.random() * 2200 :
-          v.category === "Housekeeping" ? 600 + Math.random() * 1800 :
-          v.category === "Operations" ? 250 + Math.random() * 900 :
-          v.category === "Guest Supplies" ? 400 + Math.random() * 1600 :
-          200 + Math.random() * 600;
-        const amount = Math.round(baseAmount * 100) / 100;
-        // Status: 60% paid (random past), 30% open, 10% overdue
-        const r = Math.random();
-        let status = "open";
-        let paidDate = null;
-        if (r < 0.55 && daysAgo > 5) {
-          status = "paid";
-          paidDate = iso(addDays(issued, Math.min(termsDays - 1, Math.floor(Math.random() * termsDays))));
-        } else if (dueDate < today) {
-          status = "overdue";
-        }
-        SEED.invoices.push({
-          id: `inv${id++}`,
-          vendorId: v.id,
-          propertyId: prop.id,
-          number: `${v.id.toUpperCase()}-${prop.id.toUpperCase()}-${1000 + id}`,
-          issuedDate: iso(issued),
-          dueDate: iso(dueDate),
-          paidDate,
-          amount,
-          status, // open | paid | overdue | approved | rejected
-          glAccount: v.category === "Food & Beverage" ? "5210" :
-                     v.category === "Utilities" ? "5350" :
-                     v.category === "Maintenance" ? "5410" :
-                     v.category === "Housekeeping" ? "5320" :
-                     v.category === "Operations" ? "5520" :
-                     v.category === "Guest Supplies" ? "5310" : "5900",
-          memo: "",
-          approvalState: r < 0.85 ? "approved" : "pending",
-          createdAt: issued.toISOString(),
-        });
-      }
-    });
-  });
-})();
 
 /* =========================================================================
    STORAGE LAYER
@@ -557,6 +336,10 @@ export default function HotelOps() {
     vendors: SEED.vendors,
     invoices: SEED.invoices,
     ptoRequests: SEED.ptoRequests,
+    payrollRuns: SEED.payrollRuns,
+    taxFilings: SEED.taxFilings,
+    contractors: SEED.contractors,
+    contractorPayments: SEED.contractorPayments,
   });
   const [currentUserId, setCurrentUserId] = useState(null);
   const [activeProperty, setActiveProperty] = useState("p1");
@@ -580,9 +363,13 @@ export default function HotelOps() {
         }
         if (!merged.activity) merged.activity = [];
         if (!merged.closedPeriods) merged.closedPeriods = [];
-        if (!merged.vendors) merged.vendors = SEED.vendors;
-        if (!merged.invoices) merged.invoices = SEED.invoices;
-        if (!merged.ptoRequests) merged.ptoRequests = SEED.ptoRequests;
+        if (!merged.vendors) merged.vendors = [];
+        if (!merged.invoices) merged.invoices = [];
+        if (!merged.ptoRequests) merged.ptoRequests = [];
+        if (!merged.payrollRuns) merged.payrollRuns = [];
+        if (!merged.taxFilings) merged.taxFilings = [];
+        if (!merged.contractors) merged.contractors = [];
+        if (!merged.contractorPayments) merged.contractorPayments = [];
         setState(merged);
         setCurrentUserId(saved.currentUserId || null);
         setActiveProperty(saved.activeProperty || "p1");
@@ -728,6 +515,48 @@ export default function HotelOps() {
             </div>
           </div>
         </div>
+      </>
+    );
+  }
+
+  // Fresh install — no employees yet. Run the first-launch SetupWizard
+  // which creates the owner account + first property in one flow.
+  if (state.employees.length === 0) {
+    return (
+      <>
+        <GlobalStyle />
+        <SetupWizard
+          onComplete={({ owner, property }) => {
+            const propId = newId("p");
+            const ownerId = newId("e");
+            const newProp = { id: propId, name: property.name, location: property.location, rooms: Number(property.rooms) || 0, type: property.type, aliases: [] };
+            const newOwner = {
+              id: ownerId,
+              firstName: owner.firstName,
+              lastName: owner.lastName,
+              role: "admin",
+              title: owner.title || "Owner",
+              email: owner.email,
+              phone: owner.phone || "",
+              propertyId: propId,
+              propertyAccess: [propId],
+              hourlyRate: 0,
+              salary: 0,
+              hireDate: iso(TODAY),
+              status: "active",
+              ssnLast4: "",
+              emergency: "",
+            };
+            setState(s => ({
+              ...s,
+              properties: [newProp],
+              employees: [newOwner],
+            }));
+            setCurrentUserId(ownerId);
+            setActiveProperty(propId);
+            setView("dashboard");
+          }}
+        />
       </>
     );
   }
@@ -942,12 +771,218 @@ function OnboardingWizard({ ctx, onClose }) {
 }
 
 /* =========================================================================
+   SETUP WIZARD — first-run, creates owner account + first property
+   Replaces the old demo-login experience. Three steps, no skips.
+   ========================================================================= */
+function SetupWizard({ onComplete }) {
+  const [step, setStep] = useState(0);
+  const [owner, setOwner] = useState({ firstName: "", lastName: "", title: "Owner", email: "", phone: "" });
+  const [property, setProperty] = useState({ name: "", location: "", rooms: "", type: "Limited Service" });
+  const [splash, setSplash] = useState(true);
+
+  useEffect(() => {
+    const t = setTimeout(() => setSplash(false), 1200);
+    return () => clearTimeout(t);
+  }, []);
+
+  const ownerOk = owner.firstName.trim() && owner.lastName.trim() && /\S+@\S+\.\S+/.test(owner.email);
+  const propertyOk = property.name.trim() && property.location.trim();
+
+  const goNext = () => setStep(s => Math.min(2, s + 1));
+  const goBack = () => setStep(s => Math.max(0, s - 1));
+
+  if (splash) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: "linear-gradient(135deg, #1c1917 0%, #292524 50%, #44403c 100%)" }}>
+        <div className="text-center anim-fade-up">
+          <div className="w-20 h-20 mx-auto mb-6 rounded-2xl flex items-center justify-center" style={{ background: "linear-gradient(135deg, #b45309 0%, #92400e 100%)", boxShadow: "0 20px 50px -10px rgba(180,83,9,0.6)" }}>
+            <Building2 className="w-10 h-10 text-white" strokeWidth={1.5} />
+          </div>
+          <h1 className="font-display text-5xl font-bold text-white mb-3">HotelOps</h1>
+          <p className="text-stone-400 text-lg">Premium hotel accounting · payroll · operations</p>
+          <div className="mt-8 inline-flex items-center gap-2 text-amber-500/80">
+            <div className="w-2 h-2 rounded-full bg-amber-500 anim-pulse-soft" />
+            <div className="w-2 h-2 rounded-full bg-amber-500 anim-pulse-soft delay-100" />
+            <div className="w-2 h-2 rounded-full bg-amber-500 anim-pulse-soft delay-200" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const steps = ["Welcome", "Your account", "Your first property"];
+  return (
+    <div className="min-h-screen flex" style={{ background: "linear-gradient(135deg, #1c1917 0%, #292524 100%)" }}>
+      {/* Left rail — brand + step indicator */}
+      <div className="w-2/5 px-12 py-10 flex flex-col justify-between text-white" style={{ background: "linear-gradient(180deg, rgba(180,83,9,0.18) 0%, rgba(180,83,9,0) 100%)" }}>
+        <div>
+          <div className="flex items-center gap-3 mb-12">
+            <div className="w-11 h-11 rounded-xl flex items-center justify-center" style={{ background: "linear-gradient(135deg, #b45309 0%, #78350f 100%)" }}>
+              <Building2 className="w-6 h-6" strokeWidth={2} />
+            </div>
+            <div>
+              <div className="font-display text-2xl font-bold">HotelOps</div>
+              <div className="text-xs text-stone-400 -mt-1">Premium accounting suite</div>
+            </div>
+          </div>
+          <h2 className="font-display text-4xl font-bold mb-4 leading-tight">Welcome.<br/><span className="text-amber-400">Let's get you set up.</span></h2>
+          <p className="text-stone-400 text-base leading-relaxed max-w-md mb-12">
+            HotelOps handles the books your PMS won't — daily flash, P&amp;L,
+            payroll, A/P, A/R, taxes, W-2s and 1099s. We'll have your first
+            property running in under 60 seconds.
+          </p>
+          <div className="space-y-3">
+            {steps.map((label, i) => (
+              <div key={i} className="flex items-center gap-3">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${i < step ? "bg-emerald-600 text-white" : i === step ? "bg-amber-600 text-white" : "bg-stone-700/50 text-stone-400"}`}>
+                  {i < step ? <CheckCircle2 className="w-5 h-5" /> : i + 1}
+                </div>
+                <span className={`text-sm ${i === step ? "text-white font-medium" : "text-stone-400"}`}>{label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="text-xs text-stone-500">
+          All data stays on this machine. Nothing is sent to a server.
+        </div>
+      </div>
+
+      {/* Right pane — step content */}
+      <div className="flex-1 flex items-center justify-center px-12 py-10 bg-stone-50">
+        <div className="w-full max-w-lg anim-fade-up" key={step}>
+          {step === 0 && (
+            <div>
+              <div className="text-amber-700 text-sm font-medium uppercase tracking-wider mb-3">Step 1 of 3</div>
+              <h3 className="font-display text-3xl font-bold text-stone-900 mb-3">Hi there.</h3>
+              <p className="text-stone-600 mb-8 leading-relaxed">
+                You're about to set up the entire accounting backbone for your
+                hotel. We'll create your owner account first, then add your
+                property. You can add more properties, employees, and vendors
+                from inside the app afterward.
+              </p>
+              <div className="space-y-3 mb-8">
+                {[
+                  { icon: Receipt, label: "Daily flash · P&L · A/R · A/P · reconcile" },
+                  { icon: Users, label: "Employees · payroll · scheduling · time clock" },
+                  { icon: FileCheck2, label: "Tax calendar · W-2 · 1099-NEC at year-end" },
+                  { icon: TrendingUp, label: "Trends · forecasting · multi-property roll-up" },
+                ].map((f, i) => (
+                  <div key={i} className="flex items-center gap-3 text-sm text-stone-700">
+                    <div className="w-8 h-8 rounded-md bg-amber-50 border border-amber-200 flex items-center justify-center">
+                      <f.icon className="w-4 h-4 text-amber-700" />
+                    </div>
+                    {f.label}
+                  </div>
+                ))}
+              </div>
+              <button onClick={goNext} className="w-full px-6 py-3.5 rounded-lg bg-stone-900 hover:bg-stone-800 text-white font-medium flex items-center justify-center gap-2 transition-all">
+                Get started <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {step === 1 && (
+            <div>
+              <div className="text-amber-700 text-sm font-medium uppercase tracking-wider mb-3">Step 2 of 3</div>
+              <h3 className="font-display text-3xl font-bold text-stone-900 mb-3">Your owner account.</h3>
+              <p className="text-stone-600 mb-8">This is the master admin account. You can add managers and staff later.</p>
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <Field label="First name" required>
+                  <input value={owner.firstName} onChange={e => setOwner({ ...owner, firstName: e.target.value })} className="w-full px-3 py-2.5 rounded-lg border border-stone-300 focus:ring-2 focus:ring-amber-700 focus:border-amber-700 outline-none" placeholder="Jordan" autoFocus />
+                </Field>
+                <Field label="Last name" required>
+                  <input value={owner.lastName} onChange={e => setOwner({ ...owner, lastName: e.target.value })} className="w-full px-3 py-2.5 rounded-lg border border-stone-300 focus:ring-2 focus:ring-amber-700 focus:border-amber-700 outline-none" placeholder="Carter" />
+                </Field>
+              </div>
+              <Field label="Job title" hint="e.g. Owner, Regional Director, GM">
+                <input value={owner.title} onChange={e => setOwner({ ...owner, title: e.target.value })} className="w-full px-3 py-2.5 rounded-lg border border-stone-300 focus:ring-2 focus:ring-amber-700 focus:border-amber-700 outline-none" />
+              </Field>
+              <Field label="Work email" required>
+                <input type="email" value={owner.email} onChange={e => setOwner({ ...owner, email: e.target.value })} className="w-full px-3 py-2.5 rounded-lg border border-stone-300 focus:ring-2 focus:ring-amber-700 focus:border-amber-700 outline-none" placeholder="jordan@yourhotel.com" />
+              </Field>
+              <Field label="Phone" hint="Optional">
+                <input value={owner.phone} onChange={e => setOwner({ ...owner, phone: e.target.value })} className="w-full px-3 py-2.5 rounded-lg border border-stone-300 focus:ring-2 focus:ring-amber-700 focus:border-amber-700 outline-none" placeholder="(555) 123-4567" />
+              </Field>
+              <div className="flex gap-3 mt-8">
+                <button onClick={goBack} className="px-5 py-3 rounded-lg border border-stone-300 hover:bg-stone-100 font-medium text-stone-700">Back</button>
+                <button onClick={goNext} disabled={!ownerOk} className="flex-1 px-6 py-3 rounded-lg bg-stone-900 hover:bg-stone-800 disabled:bg-stone-300 text-white font-medium flex items-center justify-center gap-2">
+                  Continue <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {step === 2 && (
+            <div>
+              <div className="text-amber-700 text-sm font-medium uppercase tracking-wider mb-3">Step 3 of 3</div>
+              <h3 className="font-display text-3xl font-bold text-stone-900 mb-3">Your first property.</h3>
+              <p className="text-stone-600 mb-8">You can add more properties later from Settings.</p>
+              <Field label="Property name" required>
+                <input value={property.name} onChange={e => setProperty({ ...property, name: e.target.value })} className="w-full px-3 py-2.5 rounded-lg border border-stone-300 focus:ring-2 focus:ring-amber-700 focus:border-amber-700 outline-none" placeholder="Riverbend Inn" autoFocus />
+              </Field>
+              <Field label="City, State" required>
+                <input value={property.location} onChange={e => setProperty({ ...property, location: e.target.value })} className="w-full px-3 py-2.5 rounded-lg border border-stone-300 focus:ring-2 focus:ring-amber-700 focus:border-amber-700 outline-none" placeholder="Pine Bluff, AR" />
+              </Field>
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Rooms" hint="Optional">
+                  <input type="number" min="0" value={property.rooms} onChange={e => setProperty({ ...property, rooms: e.target.value })} className="w-full px-3 py-2.5 rounded-lg border border-stone-300 focus:ring-2 focus:ring-amber-700 focus:border-amber-700 outline-none" placeholder="84" />
+                </Field>
+                <Field label="Service type">
+                  <select value={property.type} onChange={e => setProperty({ ...property, type: e.target.value })} className="w-full px-3 py-2.5 rounded-lg border border-stone-300 focus:ring-2 focus:ring-amber-700 focus:border-amber-700 outline-none bg-white">
+                    <option>Limited Service</option>
+                    <option>Select Service</option>
+                    <option>Full Service</option>
+                    <option>Extended Stay</option>
+                    <option>Resort</option>
+                    <option>Boutique</option>
+                  </select>
+                </Field>
+              </div>
+              <div className="flex gap-3 mt-8">
+                <button onClick={goBack} className="px-5 py-3 rounded-lg border border-stone-300 hover:bg-stone-100 font-medium text-stone-700">Back</button>
+                <button
+                  onClick={() => onComplete({ owner, property })}
+                  disabled={!propertyOk}
+                  className="flex-1 px-6 py-3 rounded-lg bg-amber-700 hover:bg-amber-800 disabled:bg-stone-300 text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-amber-900/20"
+                >
+                  Open HotelOps <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, hint, required, children }) {
+  return (
+    <div className="mb-4">
+      <label className="block text-sm font-medium text-stone-700 mb-1.5">
+        {label} {required && <span className="text-amber-700">*</span>}
+        {hint && <span className="ml-2 text-xs text-stone-500 font-normal">· {hint}</span>}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+/* =========================================================================
    LOGIN
    ========================================================================= */
 function LoginScreen({ employees, properties, onLogin }) {
   const [hover, setHover] = useState(null);
-  const featuredIds = ["e1", "e2", "e3", "e4", "e8", "e12"];
-  const featured = featuredIds.map(id => employees.find(e => e.id === id)).filter(Boolean);
+  const [search, setSearch] = useState("");
+  const activeEmployees = employees.filter(e => e.status !== "terminated");
+  const filtered = activeEmployees.filter(e => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return fullName(e).toLowerCase().includes(q) || (e.title || "").toLowerCase().includes(q) || (e.email || "").toLowerCase().includes(q);
+  });
+  // Cap rendered list — search filters down for larger orgs.
+  const featured = filtered.slice(0, 12);
+  const totalRooms = properties.reduce((s, p) => s + (p.rooms || 0), 0);
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-6 relative overflow-hidden"
@@ -978,16 +1013,11 @@ function LoginScreen({ employees, properties, onLogin }) {
         </path>
       </svg>
 
-      {/* Floating live KPI bubbles */}
-      <div className="absolute top-10 left-10 hidden lg:block opacity-60 anim-fade-up">
-        <div className="font-display text-amber-500 text-xs uppercase tracking-[0.3em] mb-1">Live · Portfolio</div>
-        <div className="font-display number-display text-white text-4xl font-semibold">$847K</div>
-        <div className="text-xs text-stone-400">Revenue this month</div>
-      </div>
+      {/* Portfolio summary — only shown if there's data to summarize */}
       <div className="absolute top-10 right-10 hidden lg:block opacity-60 text-right anim-fade-up delay-200">
-        <div className="font-display text-amber-500 text-xs uppercase tracking-[0.3em] mb-1">Properties</div>
+        <div className="font-display text-amber-500 text-xs uppercase tracking-[0.3em] mb-1">Portfolio</div>
         <div className="font-display number-display text-white text-4xl font-semibold">{properties.length}</div>
-        <div className="text-xs text-stone-400">{properties.reduce((s, p) => s + p.rooms, 0)} rooms total</div>
+        <div className="text-xs text-stone-400">{properties.length === 1 ? "property" : "properties"}{totalRooms ? ` · ${totalRooms} rooms` : ""}</div>
       </div>
 
       <div className="max-w-2xl w-full relative z-10">
@@ -1008,12 +1038,30 @@ function LoginScreen({ employees, properties, onLogin }) {
           </h1>
           <p className="text-stone-400 text-sm max-w-md mx-auto">
             Daily accounting · payroll · scheduling · workforce records.
-            Sign in below to enter the demo as any role.
+            Pick the account you want to sign in as.
           </p>
         </div>
 
         <div className="bg-stone-900/70 backdrop-blur-md rounded-xl border border-stone-700/80 p-6 shadow-2xl shadow-black/50">
-          <p className="text-xs uppercase tracking-widest text-stone-400 mb-4 font-medium">Choose a profile</p>
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-xs uppercase tracking-widest text-stone-400 font-medium">Sign in</p>
+            {activeEmployees.length > 6 && (
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-stone-500" />
+                <input
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder="Search by name…"
+                  className="pl-8 pr-3 py-1.5 rounded-md bg-stone-800 border border-stone-700 text-stone-200 text-xs placeholder-stone-500 focus:border-amber-700 focus:outline-none w-48"
+                />
+              </div>
+            )}
+          </div>
+          {featured.length === 0 ? (
+            <div className="py-10 text-center text-stone-400 text-sm">
+              {search ? "No matches." : "No staff accounts yet."}
+            </div>
+          ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {featured.map(emp => {
               const prop = properties.find(p => p.id === emp.propertyId);
@@ -1036,15 +1084,12 @@ function LoginScreen({ employees, properties, onLogin }) {
               );
             })}
           </div>
+          )}
           <div className="mt-5 pt-5 border-t border-stone-700 flex items-center justify-between text-xs text-stone-500">
-            <span>v1.0 · Build 2026.05</span>
+            <span>{activeEmployees.length} active {activeEmployees.length === 1 ? "account" : "accounts"}</span>
             <span className="inline-flex items-center gap-1.5"><span className="w-1.5 h-1.5 bg-emerald-500 rounded-full" /> All systems operational</span>
           </div>
         </div>
-
-        <p className="text-center text-stone-500 text-xs mt-6 font-body">
-          Tip: try Marcus (admin) for the full multi-property view, Sarah (manager) for property-level access, or Aisha (front desk) for the staff view.
-        </p>
       </div>
     </div>
   );
@@ -1845,6 +1890,15 @@ function Dashboard({ ctx }) {
     return out.sort((a, b) => Math.abs(b.z) - Math.abs(a.z)).slice(0, 4);
   }, [state.reports, propsToShow]);
 
+  // First-run experience: no reports, no payroll, just the owner. Render a
+  // welcome canvas with concrete next-actions instead of the operating
+  // dashboard so the user has somewhere obvious to start.
+  const isFirstRun = state.reports.length === 0 && state.employees.length <= 1 && state.invoices.length === 0;
+
+  if (isFirstRun) {
+    return <FirstRunDashboard ctx={ctx} />;
+  }
+
   return (
     <div className="p-8 space-y-6 max-w-7xl">
       <LiveTicker propIds={propIds} state={state} />
@@ -2034,6 +2088,157 @@ function Dashboard({ ctx }) {
               })}
             </div>
           )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================================
+   FIRST-RUN DASHBOARD — replaces the operating dashboard for empty data.
+   Big, friendly, opinionated about what to do first.
+   ========================================================================= */
+function FirstRunDashboard({ ctx }) {
+  const { state, currentUser, perms, setView } = ctx;
+  const property = state.properties[0];
+
+  const steps = [
+    {
+      id: "ingest",
+      icon: Upload,
+      title: "Ingest your first night-audit",
+      desc: "Drop yesterday's audit PDF, paste the text, or run a batch of dates. We extract revenues, occupancy, taxes, and post a Flash Report automatically.",
+      cta: "Open Smart Ingest",
+      tone: "amber",
+      shortcut: "⌘I",
+      primary: true,
+      onClick: () => { setView("accounting"); _commandBus.emit("ingest:open"); },
+    },
+    {
+      id: "team",
+      icon: Users,
+      title: "Add your team",
+      desc: "Bring in employees with hourly rates, salaries, hire dates, and emergency contacts. Time clock, schedule, and payroll all flow from here.",
+      cta: "Manage Employees",
+      tone: "violet",
+      onClick: () => setView("employees"),
+    },
+    {
+      id: "vendors",
+      icon: Receipt,
+      title: "Set up A/P vendors",
+      desc: "Add your suppliers — F&B, utilities, linen, maintenance — with payment terms. Then log invoices for approval and aging tracking.",
+      cta: "Open Accounts Payable",
+      tone: "emerald",
+      onClick: () => { setView("accounting"); },
+    },
+    {
+      id: "tax",
+      icon: FileCheck2,
+      title: "Configure tax IDs &amp; year-end",
+      desc: "Set occupancy / sales / tourism tax rates, your EIN, and W-2 / 1099 employer details so year-end forms can populate the moment payroll posts.",
+      cta: "Open Settings",
+      tone: "sky",
+      onClick: () => setView("settings"),
+    },
+  ];
+
+  const checklist = [
+    { label: "Owner account created", done: true },
+    { label: `${property?.name || "First property"} configured`, done: !!property },
+    { label: "First employee added", done: state.employees.length > 1 },
+    { label: "First night-audit ingested", done: state.reports.length > 0 },
+    { label: "First payroll run posted", done: state.payrollRuns.length > 0 },
+    { label: "First A/P invoice logged", done: state.invoices.length > 0 },
+  ];
+
+  return (
+    <div className="p-10 max-w-6xl mx-auto">
+      {/* Hero */}
+      <div className="anim-fade-up mb-10">
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-100 border border-amber-200 text-amber-800 text-[10px] font-bold tracking-widest uppercase mb-4">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-600 anim-pulse-soft" />
+          Welcome to HotelOps
+        </div>
+        <h1 className="font-display text-5xl font-bold text-stone-900 mb-3 leading-tight">
+          Hi {currentUser.firstName}. Let's set up<br/>
+          <span className="italic text-amber-700">{property?.name || "your hotel"}.</span>
+        </h1>
+        <p className="text-stone-600 text-lg max-w-2xl">
+          You can dive into any module from the sidebar — but here's the
+          fastest path to a working set of books.
+        </p>
+      </div>
+
+      {/* Action cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10">
+        {steps.map((s, i) => (
+          <button
+            key={s.id}
+            onClick={s.onClick}
+            className={`group text-left rounded-xl border bg-white p-6 transition-all hover:-translate-y-0.5 hover:shadow-xl anim-fade-up
+              ${s.primary
+                ? "border-amber-300 shadow-lg shadow-amber-100/50 ring-1 ring-amber-200"
+                : "border-stone-200 hover:border-amber-300"}`}
+            style={{ animationDelay: `${i * 80}ms` }}
+          >
+            <div className="flex items-start gap-4">
+              <div className={`shrink-0 w-12 h-12 rounded-lg flex items-center justify-center
+                ${s.tone === "amber" ? "bg-gradient-to-br from-amber-500 to-amber-700 text-white" :
+                  s.tone === "violet" ? "bg-gradient-to-br from-violet-500 to-violet-700 text-white" :
+                  s.tone === "emerald" ? "bg-gradient-to-br from-emerald-500 to-emerald-700 text-white" :
+                  "bg-gradient-to-br from-sky-500 to-sky-700 text-white"}`}>
+                <s.icon className="w-6 h-6" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <h3 className="font-display text-xl font-semibold text-stone-900">{s.title}</h3>
+                  {s.shortcut && <span className="text-[10px] font-mono text-stone-400 bg-stone-100 px-1.5 py-0.5 rounded">{s.shortcut}</span>}
+                </div>
+                <p className="text-sm text-stone-600 leading-relaxed mb-3">{s.desc}</p>
+                <div className={`inline-flex items-center gap-1 text-sm font-semibold
+                  ${s.tone === "amber" ? "text-amber-700" :
+                    s.tone === "violet" ? "text-violet-700" :
+                    s.tone === "emerald" ? "text-emerald-700" : "text-sky-700"}`}>
+                  {s.cta}
+                  <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
+                </div>
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Setup checklist + quick stats */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <Card className="md:col-span-2 p-6">
+          <div className="text-xs uppercase tracking-widest text-stone-500 font-semibold mb-3">Setup checklist</div>
+          <div className="space-y-2.5">
+            {checklist.map((c, i) => (
+              <div key={i} className="flex items-center gap-3">
+                {c.done ? (
+                  <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                  </div>
+                ) : (
+                  <div className="w-5 h-5 rounded-full border-2 border-stone-300" />
+                )}
+                <span className={`text-sm ${c.done ? "text-stone-500 line-through" : "text-stone-800"}`}>{c.label}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="p-6 bg-gradient-to-br from-stone-900 to-stone-800 text-white">
+          <div className="text-xs uppercase tracking-widest text-amber-400 font-semibold mb-2">Pro tip</div>
+          <div className="font-display text-lg font-semibold mb-3 leading-tight">
+            Press <span className="font-mono bg-stone-700 px-1.5 py-0.5 rounded text-sm">⌘K</span> to jump anywhere.
+          </div>
+          <p className="text-sm text-stone-400 leading-relaxed">
+            The command palette is the fastest way to navigate, find an
+            employee, switch properties, or trigger an action — without ever
+            touching the sidebar.
+          </p>
         </Card>
       </div>
     </div>
@@ -4076,6 +4281,7 @@ function AccountingModule({ ctx }) {
             { id: "ar", label: "A/R Aging", icon: Receipt },
             { id: "ap", label: "A/P", icon: Receipt },
             { id: "tax", label: "Tax Calendar", icon: Calendar },
+            { id: "yearend", label: "W-2 / 1099", icon: FileCheck2 },
             { id: "compset", label: "Compset", icon: TrendingUp },
             { id: "portfolio", label: "Portfolio", icon: Building2 },
             { id: "trends", label: "Trends", icon: TrendingUp },
@@ -4109,6 +4315,7 @@ function AccountingModule({ ctx }) {
       {tab === "ap" && <ApPane ctx={ctx} />}
       {tab === "ar" && <ArAgingPane ctx={ctx} />}
       {tab === "tax" && <TaxCalendarPane ctx={ctx} />}
+      {tab === "yearend" && <YearEndFormsPane ctx={ctx} />}
       {tab === "compset" && <CompsetPane ctx={ctx} />}
       {tab === "portfolio" && <PortfolioPane ctx={ctx} setTab={setTab} />}
       {tab === "trends" && <TrendsPane ctx={ctx} />}
@@ -6370,6 +6577,578 @@ function TaxCalendarPane({ ctx }) {
         )}
       </Card>
     </div>
+  );
+}
+
+/* =========================================================================
+   YEAR-END FORMS PANE — W-2 (employees) and 1099-NEC (contractors)
+   Computes wages/tax YTD from payrollRuns + contractorPayments. Lets the
+   user prep, review, and export the year-end form set in one place.
+   ========================================================================= */
+const FED_TAX_BRACKETS_2026 = [ // single-filer simplified (informational only)
+  { upTo: 11600, rate: 0.10 },
+  { upTo: 47150, rate: 0.12 },
+  { upTo: 100525, rate: 0.22 },
+  { upTo: 191950, rate: 0.24 },
+  { upTo: 243725, rate: 0.32 },
+  { upTo: 609350, rate: 0.35 },
+  { upTo: Infinity, rate: 0.37 },
+];
+const SS_WAGE_BASE_2026 = 168600;
+const SS_RATE = 0.062;
+const MEDICARE_RATE = 0.0145;
+const MEDICARE_ADDL_RATE = 0.009; // applies above $200k single
+const MEDICARE_ADDL_THRESHOLD = 200000;
+
+function computeW2Summary(employee, runs, year) {
+  // runs: payrollRuns for this employee in `year`
+  const lines = runs.flatMap(r => (r.lines || []).filter(l => l.employeeId === employee.id && new Date(r.periodEnd).getFullYear() === year));
+  const grossWages = lines.reduce((s, l) => s + (l.gross || 0), 0);
+  const fedWithheld = lines.reduce((s, l) => s + (l.fedWithheld || 0), 0);
+  const stateWithheld = lines.reduce((s, l) => s + (l.stateWithheld || 0), 0);
+  const ssWages = Math.min(grossWages, SS_WAGE_BASE_2026);
+  const ssTax = Math.round(ssWages * SS_RATE * 100) / 100;
+  const medicareWages = grossWages;
+  let medicareTax = grossWages * MEDICARE_RATE;
+  if (grossWages > MEDICARE_ADDL_THRESHOLD) {
+    medicareTax += (grossWages - MEDICARE_ADDL_THRESHOLD) * MEDICARE_ADDL_RATE;
+  }
+  medicareTax = Math.round(medicareTax * 100) / 100;
+  return {
+    employeeId: employee.id,
+    grossWages: Math.round(grossWages * 100) / 100,
+    fedWithheld: Math.round(fedWithheld * 100) / 100,
+    stateWithheld: Math.round(stateWithheld * 100) / 100,
+    ssWages: Math.round(ssWages * 100) / 100,
+    ssTax,
+    medicareWages: Math.round(medicareWages * 100) / 100,
+    medicareTax,
+    payrollCount: lines.length,
+  };
+}
+
+function YearEndFormsPane({ ctx }) {
+  const { state, update, perms, currentUser, toast } = ctx;
+  const [formType, setFormType] = useState("w2"); // w2 | 1099
+  const [year, setYear] = useState(new Date().getFullYear());
+  const [selected, setSelected] = useState(null); // employeeId or contractorId
+  const [showAddContractor, setShowAddContractor] = useState(false);
+  const [showLogPayment, setShowLogPayment] = useState(null); // contractorId
+
+  const years = useMemo(() => {
+    const set = new Set([new Date().getFullYear()]);
+    state.payrollRuns.forEach(r => set.add(new Date(r.periodEnd).getFullYear()));
+    state.contractorPayments.forEach(p => set.add(new Date(p.date).getFullYear()));
+    return Array.from(set).sort((a, b) => b - a);
+  }, [state.payrollRuns, state.contractorPayments]);
+
+  if (!perms.canRunPayroll) {
+    return (
+      <div className="p-12 text-center text-stone-500">
+        <Shield className="w-10 h-10 mx-auto mb-3 text-stone-300" />
+        Year-end forms are restricted to admins and managers.
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-8 pt-4 pb-12">
+      {/* Header */}
+      <div className="flex items-end justify-between mb-6">
+        <div>
+          <div className="text-xs uppercase tracking-widest text-amber-700 font-semibold mb-1">Year-end forms</div>
+          <h2 className="font-display text-3xl font-semibold text-stone-900">W-2 &amp; 1099-NEC</h2>
+          <p className="text-stone-500 text-sm mt-1">
+            Wage totals and withholding calculated from your posted payroll runs and contractor payments.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <select value={year} onChange={e => setYear(Number(e.target.value))} className="px-3 py-2 rounded-md border border-stone-300 bg-white text-sm font-medium">
+            {years.map(y => <option key={y} value={y}>Tax year {y}</option>)}
+          </select>
+          <div className="inline-flex rounded-lg border border-stone-300 overflow-hidden bg-white">
+            <button onClick={() => setFormType("w2")} className={`px-4 py-2 text-sm font-medium ${formType === "w2" ? "bg-stone-900 text-white" : "text-stone-700 hover:bg-stone-50"}`}>W-2 · Employees</button>
+            <button onClick={() => setFormType("1099")} className={`px-4 py-2 text-sm font-medium border-l border-stone-300 ${formType === "1099" ? "bg-stone-900 text-white" : "text-stone-700 hover:bg-stone-50"}`}>1099-NEC · Contractors</button>
+          </div>
+        </div>
+      </div>
+
+      {formType === "w2" ? (
+        <W2Section
+          ctx={ctx}
+          year={year}
+          selected={selected}
+          setSelected={setSelected}
+        />
+      ) : (
+        <Contractor1099Section
+          ctx={ctx}
+          year={year}
+          selected={selected}
+          setSelected={setSelected}
+          onAddContractor={() => setShowAddContractor(true)}
+          onLogPayment={(id) => setShowLogPayment(id)}
+        />
+      )}
+
+      {showAddContractor && (
+        <ContractorModal
+          contractor={null}
+          onClose={() => setShowAddContractor(false)}
+          onSave={(c) => {
+            const newC = { ...c, id: newId("c"), createdAt: new Date().toISOString(), createdBy: currentUser.id };
+            update({ contractors: [...state.contractors, newC] });
+            toast?.push(`${newC.name} added as a contractor.`, { tone: "success" });
+            setShowAddContractor(false);
+          }}
+        />
+      )}
+      {showLogPayment && (
+        <PaymentModal
+          contractor={state.contractors.find(c => c.id === showLogPayment)}
+          properties={state.properties}
+          onClose={() => setShowLogPayment(null)}
+          onSave={(p) => {
+            const newP = { ...p, id: newId("cp"), contractorId: showLogPayment, createdAt: new Date().toISOString(), createdBy: currentUser.id };
+            update({ contractorPayments: [...state.contractorPayments, newP] });
+            toast?.push(`Payment of ${fmtMoney(p.amount)} logged.`, { tone: "success" });
+            setShowLogPayment(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function W2Section({ ctx, year, selected, setSelected }) {
+  const { state } = ctx;
+  const employees = state.employees.filter(e => e.status === "active" || e.status === "terminated");
+  const summaries = useMemo(
+    () => employees.map(emp => ({ employee: emp, summary: computeW2Summary(emp, state.payrollRuns, year) })),
+    [employees, state.payrollRuns, year]
+  );
+  const totals = summaries.reduce((acc, { summary: s }) => {
+    acc.grossWages += s.grossWages;
+    acc.fedWithheld += s.fedWithheld;
+    acc.ssTax += s.ssTax;
+    acc.medicareTax += s.medicareTax;
+    return acc;
+  }, { grossWages: 0, fedWithheld: 0, ssTax: 0, medicareTax: 0 });
+
+  if (employees.length === 0) {
+    return (
+      <Card>
+        <Empty
+          icon={Users}
+          title="No employees yet"
+          message="Add employees to start tracking wages and withholdings for W-2 generation."
+        />
+      </Card>
+    );
+  }
+
+  const employeesWithWages = summaries.filter(s => s.summary.grossWages > 0);
+  const detail = selected ? summaries.find(s => s.employee.id === selected) : null;
+
+  return (
+    <div>
+      {/* Totals strip */}
+      <div className="grid grid-cols-4 gap-4 mb-6">
+        <YearEndStat label="Gross wages YTD" value={fmtMoneyShort(totals.grossWages)} sub={`${employeesWithWages.length} of ${employees.length} employees paid`} />
+        <YearEndStat label="Federal withheld" value={fmtMoneyShort(totals.fedWithheld)} sub="Box 2 total" />
+        <YearEndStat label="Social Security tax" value={fmtMoneyShort(totals.ssTax)} sub={`${(SS_RATE*100).toFixed(1)}% to $${SS_WAGE_BASE_2026.toLocaleString()}`} />
+        <YearEndStat label="Medicare tax" value={fmtMoneyShort(totals.medicareTax)} sub={`${(MEDICARE_RATE*100).toFixed(2)}% + 0.9% above $200K`} />
+      </div>
+
+      {employeesWithWages.length === 0 ? (
+        <Card>
+          <div className="p-12 text-center">
+            <ClipboardList className="w-10 h-10 mx-auto text-stone-300 mb-3" />
+            <div className="font-display text-xl text-stone-900 mb-1">No payroll runs posted for {year}</div>
+            <div className="text-stone-500 text-sm max-w-md mx-auto">
+              Run payroll inside the Payroll module — once a run is posted, wages and
+              withholdings will populate here automatically.
+            </div>
+          </div>
+        </Card>
+      ) : (
+        <Card>
+          <div className="px-5 py-3 border-b border-stone-200 flex items-center justify-between">
+            <div className="text-sm font-semibold text-stone-700">Employee wage summary · {year}</div>
+            <button className="text-xs text-amber-700 hover:text-amber-800 font-medium inline-flex items-center gap-1">
+              <Download className="w-3.5 h-3.5" /> Export CSV
+            </button>
+          </div>
+          <table className="w-full text-sm">
+            <thead className="bg-stone-50 text-xs text-stone-500 uppercase tracking-wider">
+              <tr>
+                <th className="text-left px-5 py-2.5 font-medium">Employee</th>
+                <th className="text-right px-3 py-2.5 font-medium">Gross (Box 1)</th>
+                <th className="text-right px-3 py-2.5 font-medium">Fed (Box 2)</th>
+                <th className="text-right px-3 py-2.5 font-medium">SS wages (3)</th>
+                <th className="text-right px-3 py-2.5 font-medium">SS tax (4)</th>
+                <th className="text-right px-3 py-2.5 font-medium">Medicare (6)</th>
+                <th className="text-right px-3 py-2.5 font-medium">State (17)</th>
+                <th className="px-3 py-2.5"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {summaries.map(({ employee: emp, summary: s }) => (
+                <tr key={emp.id} className={`hover:bg-amber-50/40 cursor-pointer ${selected === emp.id ? "bg-amber-50" : ""}`} onClick={() => setSelected(emp.id === selected ? null : emp.id)}>
+                  <td className="px-5 py-2.5">
+                    <div className="font-medium text-stone-900">{fullName(emp)}</div>
+                    <div className="text-xs text-stone-500">{emp.title}{emp.status === "terminated" ? " · Terminated" : ""}</div>
+                  </td>
+                  <td className="text-right tabular px-3 py-2.5 font-semibold">{fmtMoney(s.grossWages)}</td>
+                  <td className="text-right tabular px-3 py-2.5">{fmtMoney(s.fedWithheld)}</td>
+                  <td className="text-right tabular px-3 py-2.5 text-stone-600">{fmtMoney(s.ssWages)}</td>
+                  <td className="text-right tabular px-3 py-2.5">{fmtMoney(s.ssTax)}</td>
+                  <td className="text-right tabular px-3 py-2.5">{fmtMoney(s.medicareTax)}</td>
+                  <td className="text-right tabular px-3 py-2.5">{fmtMoney(s.stateWithheld)}</td>
+                  <td className="text-right px-3 py-2.5">
+                    <ChevronRight className={`w-4 h-4 inline transition-transform ${selected === emp.id ? "rotate-90 text-amber-700" : "text-stone-300"}`} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot className="bg-stone-50 border-t border-stone-200 font-semibold">
+              <tr>
+                <td className="px-5 py-2.5 text-stone-700">Totals · {year}</td>
+                <td className="text-right tabular px-3 py-2.5">{fmtMoney(totals.grossWages)}</td>
+                <td className="text-right tabular px-3 py-2.5">{fmtMoney(totals.fedWithheld)}</td>
+                <td className="text-right tabular px-3 py-2.5"></td>
+                <td className="text-right tabular px-3 py-2.5">{fmtMoney(totals.ssTax)}</td>
+                <td className="text-right tabular px-3 py-2.5">{fmtMoney(totals.medicareTax)}</td>
+                <td className="text-right tabular px-3 py-2.5"></td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </Card>
+      )}
+
+      {detail && <W2Preview employee={detail.employee} summary={detail.summary} year={year} onClose={() => setSelected(null)} />}
+    </div>
+  );
+}
+
+function W2Preview({ employee, summary, year, onClose }) {
+  return (
+    <Modal open={true} onClose={onClose} size="lg" title={`W-2 preview · ${fullName(employee)} · ${year}`}>
+      <div className="border-2 border-stone-300 rounded-md p-5 bg-white font-mono text-xs">
+        <div className="flex items-center justify-between border-b-2 border-stone-300 pb-2 mb-3">
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-stone-500">Form W-2 · Wage and Tax Statement</div>
+            <div className="font-bold text-base">{year}</div>
+          </div>
+          <div className="text-right text-[10px] text-stone-500">
+            <div>Department of the Treasury</div>
+            <div>Internal Revenue Service</div>
+            <div>OMB No. 1545-0008</div>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Box label="a. Employee SSN" value={employee.ssnLast4 ? `XXX-XX-${employee.ssnLast4}` : "—"} />
+          <Box label="b. Employer EIN" value="(set in Settings)" />
+          <Box label="c. Employer name &amp; address" value="(set in Settings)" colSpan />
+          <Box label="d. Control number" value="—" />
+          <Box label="e. Employee name" value={fullName(employee)} />
+          <Box label="f. Employee address" value="(on file)" />
+          <Box label="1. Wages, tips, other comp." value={fmtMoney(summary.grossWages)} />
+          <Box label="2. Federal income tax withheld" value={fmtMoney(summary.fedWithheld)} />
+          <Box label="3. Social security wages" value={fmtMoney(summary.ssWages)} />
+          <Box label="4. Social security tax withheld" value={fmtMoney(summary.ssTax)} />
+          <Box label="5. Medicare wages and tips" value={fmtMoney(summary.medicareWages)} />
+          <Box label="6. Medicare tax withheld" value={fmtMoney(summary.medicareTax)} />
+          <Box label="15. State" value="—" />
+          <Box label="16. State wages" value={fmtMoney(summary.grossWages)} />
+          <Box label="17. State income tax" value={fmtMoney(summary.stateWithheld)} />
+          <Box label="18. Local wages" value="—" />
+        </div>
+      </div>
+      <div className="flex justify-between items-center mt-5">
+        <div className="text-xs text-stone-500">
+          Calculated from {summary.payrollCount} payroll line{summary.payrollCount === 1 ? "" : "s"}.
+          Verify before filing — final W-2s should be generated by your payroll provider or a CPA.
+        </div>
+        <div className="flex gap-2">
+          <button className="px-4 py-2 rounded-md border border-stone-300 hover:bg-stone-50 text-sm">Print</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-md bg-stone-900 hover:bg-stone-800 text-white text-sm">Done</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function Box({ label, value, colSpan }) {
+  return (
+    <div className={`border border-stone-300 rounded p-2 ${colSpan ? "col-span-2" : ""}`}>
+      <div className="text-[9px] uppercase tracking-wider text-stone-500 mb-0.5">{label}</div>
+      <div className="text-sm font-semibold text-stone-900 tabular">{value}</div>
+    </div>
+  );
+}
+
+function YearEndStat({ label, value, sub }) {
+  return (
+    <Card className="p-4">
+      <div className="text-xs uppercase tracking-wider text-stone-500 mb-1">{label}</div>
+      <div className="font-display text-3xl font-semibold text-stone-900 number-display">{value}</div>
+      {sub && <div className="text-xs text-stone-500 mt-0.5">{sub}</div>}
+    </Card>
+  );
+}
+
+function Contractor1099Section({ ctx, year, selected, setSelected, onAddContractor, onLogPayment }) {
+  const { state } = ctx;
+  const yearPayments = state.contractorPayments.filter(p => new Date(p.date).getFullYear() === year);
+
+  const summaries = state.contractors.map(c => {
+    const pays = yearPayments.filter(p => p.contractorId === c.id);
+    const total = pays.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    return { contractor: c, total, count: pays.length, pays };
+  });
+  const requiresFiling = summaries.filter(s => s.total >= 600);
+  const grandTotal = summaries.reduce((s, x) => s + x.total, 0);
+  const detail = selected ? summaries.find(s => s.contractor.id === selected) : null;
+
+  return (
+    <div>
+      <div className="grid grid-cols-4 gap-4 mb-6">
+        <YearEndStat label="Total contractor spend" value={fmtMoneyShort(grandTotal)} sub={`${yearPayments.length} payments in ${year}`} />
+        <YearEndStat label="Contractors paid" value={summaries.filter(s => s.total > 0).length} sub={`${state.contractors.length} on file`} />
+        <YearEndStat label="Forms required" value={requiresFiling.length} sub="≥ $600 paid" />
+        <YearEndStat label="Filing deadline" value={`Jan 31, ${year + 1}`} sub="To IRS &amp; payee" />
+      </div>
+
+      {state.contractors.length === 0 ? (
+        <Card>
+          <div className="py-12 text-center">
+            <Briefcase className="w-10 h-10 mx-auto mb-3 text-stone-300" />
+            <div className="font-display text-xl text-stone-900 mb-1">No contractors yet</div>
+            <div className="text-stone-500 text-sm mb-5 max-w-sm mx-auto">
+              Track non-employees you pay $600+ in a year — landscapers, IT consultants,
+              freelance maintenance — so 1099-NEC forms are ready in January.
+            </div>
+            <button onClick={onAddContractor} className="px-5 py-2.5 rounded-md bg-amber-700 hover:bg-amber-800 text-white text-sm font-medium inline-flex items-center gap-2">
+              <Plus className="w-4 h-4" /> Add first contractor
+            </button>
+          </div>
+        </Card>
+      ) : (
+        <Card>
+          <div className="px-5 py-3 border-b border-stone-200 flex items-center justify-between">
+            <div className="text-sm font-semibold text-stone-700">Contractor payments · {year}</div>
+            <div className="flex items-center gap-2">
+              <button onClick={onAddContractor} className="px-3 py-1.5 rounded-md border border-stone-300 hover:bg-stone-50 text-xs font-medium inline-flex items-center gap-1">
+                <Plus className="w-3.5 h-3.5" /> Contractor
+              </button>
+              <button className="text-xs text-amber-700 hover:text-amber-800 font-medium inline-flex items-center gap-1">
+                <Download className="w-3.5 h-3.5" /> Export 1099 batch
+              </button>
+            </div>
+          </div>
+          <table className="w-full text-sm">
+            <thead className="bg-stone-50 text-xs text-stone-500 uppercase tracking-wider">
+              <tr>
+                <th className="text-left px-5 py-2.5 font-medium">Contractor</th>
+                <th className="text-left px-3 py-2.5 font-medium">TIN</th>
+                <th className="text-right px-3 py-2.5 font-medium"># Payments</th>
+                <th className="text-right px-3 py-2.5 font-medium">Total {year}</th>
+                <th className="text-center px-3 py-2.5 font-medium">1099 required</th>
+                <th className="px-3 py-2.5"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {summaries.map(({ contractor: c, total, count }) => {
+                const required = total >= 600;
+                return (
+                  <tr key={c.id} className={`hover:bg-amber-50/40 cursor-pointer ${selected === c.id ? "bg-amber-50" : ""}`} onClick={() => setSelected(c.id === selected ? null : c.id)}>
+                    <td className="px-5 py-2.5">
+                      <div className="font-medium text-stone-900">{c.name}</div>
+                      <div className="text-xs text-stone-500">{c.businessName ? `${c.businessName} · ` : ""}{c.email || "no email"}</div>
+                    </td>
+                    <td className="px-3 py-2.5 text-stone-600 font-mono text-xs">{c.tinLast4 ? `XX-XXX${c.tinLast4}` : "—"}</td>
+                    <td className="text-right tabular px-3 py-2.5">{count}</td>
+                    <td className="text-right tabular px-3 py-2.5 font-semibold">{fmtMoney(total)}</td>
+                    <td className="text-center px-3 py-2.5">
+                      {required ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-800">
+                          <FileCheck2 className="w-3 h-3" /> 1099-NEC
+                        </span>
+                      ) : (
+                        <span className="text-xs text-stone-400">— under threshold —</span>
+                      )}
+                    </td>
+                    <td className="text-right px-3 py-2.5">
+                      <button onClick={(e) => { e.stopPropagation(); onLogPayment(c.id); }} className="text-xs text-amber-700 hover:text-amber-800 font-medium px-2 py-1 rounded hover:bg-amber-50">Log payment</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
+      {detail && <Form1099Preview contractor={detail.contractor} total={detail.total} pays={detail.pays} year={year} onClose={() => setSelected(null)} />}
+    </div>
+  );
+}
+
+function Form1099Preview({ contractor, total, pays, year, onClose }) {
+  const required = total >= 600;
+  return (
+    <Modal open={true} onClose={onClose} size="lg" title={`1099-NEC preview · ${contractor.name} · ${year}`}>
+      <div className="border-2 border-stone-300 rounded-md p-5 bg-white font-mono text-xs">
+        <div className="flex items-center justify-between border-b-2 border-stone-300 pb-2 mb-3">
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-stone-500">Form 1099-NEC · Nonemployee Compensation</div>
+            <div className="font-bold text-base">{year}</div>
+          </div>
+          <div className="text-right text-[10px] text-stone-500">
+            <div>OMB No. 1545-0116</div>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Box label="Payer name &amp; address" value="(set in Settings)" colSpan />
+          <Box label="Recipient TIN" value={contractor.tinLast4 ? `XX-XXX${contractor.tinLast4}` : "—"} />
+          <Box label="Payer TIN" value="(set in Settings)" />
+          <Box label="Recipient name" value={contractor.name} colSpan />
+          <Box label="Recipient address" value={contractor.address || "(on file)"} colSpan />
+          <Box label="1. Nonemployee compensation" value={fmtMoney(total)} colSpan />
+          <Box label="4. Federal income tax withheld" value={fmtMoney(0)} />
+          <Box label="State tax withheld" value={fmtMoney(0)} />
+        </div>
+      </div>
+      {pays.length > 0 && (
+        <div className="mt-4">
+          <div className="text-xs font-semibold text-stone-600 uppercase tracking-wider mb-2">Underlying payments</div>
+          <div className="border border-stone-200 rounded max-h-48 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-stone-50 text-stone-500 uppercase">
+                <tr>
+                  <th className="text-left px-3 py-1.5">Date</th>
+                  <th className="text-left px-3 py-1.5">Memo</th>
+                  <th className="text-right px-3 py-1.5">Amount</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-100">
+                {pays.sort((a, b) => b.date.localeCompare(a.date)).map(p => (
+                  <tr key={p.id}>
+                    <td className="px-3 py-1.5 tabular">{fmtDate(p.date)}</td>
+                    <td className="px-3 py-1.5 text-stone-600">{p.memo || "—"}</td>
+                    <td className="text-right px-3 py-1.5 tabular font-semibold">{fmtMoney(p.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      <div className="flex justify-between items-center mt-5">
+        <div className="text-xs">
+          {required ? (
+            <span className="text-amber-800"><FileCheck2 className="w-3.5 h-3.5 inline mr-1" />Filing required — 1099-NEC due Jan 31, {year + 1}.</span>
+          ) : (
+            <span className="text-stone-500">Under $600 threshold — no 1099 required.</span>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <button className="px-4 py-2 rounded-md border border-stone-300 hover:bg-stone-50 text-sm">Print</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-md bg-stone-900 hover:bg-stone-800 text-white text-sm">Done</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ContractorModal({ contractor, onClose, onSave }) {
+  const [form, setForm] = useState(contractor || {
+    name: "", businessName: "", email: "", phone: "", address: "", tinLast4: "", category: "Services",
+  });
+  const ok = form.name.trim() && (form.email.trim() || form.phone.trim());
+  return (
+    <Modal open={true} onClose={onClose} size="md" title={contractor ? "Edit contractor" : "Add contractor"}>
+      <div className="space-y-4">
+        <Field label="Legal name" required>
+          <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} className="w-full px-3 py-2 rounded-md border border-stone-300 focus:border-amber-700 focus:ring-1 focus:ring-amber-700 outline-none" placeholder="Jane Smith" autoFocus />
+        </Field>
+        <Field label="Business name" hint="If a sole proprietor leave blank">
+          <input value={form.businessName} onChange={e => setForm({ ...form, businessName: e.target.value })} className="w-full px-3 py-2 rounded-md border border-stone-300 focus:border-amber-700 focus:ring-1 focus:ring-amber-700 outline-none" placeholder="Smith Landscaping LLC" />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Email">
+            <input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} className="w-full px-3 py-2 rounded-md border border-stone-300 focus:border-amber-700 focus:ring-1 focus:ring-amber-700 outline-none" />
+          </Field>
+          <Field label="Phone">
+            <input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} className="w-full px-3 py-2 rounded-md border border-stone-300 focus:border-amber-700 focus:ring-1 focus:ring-amber-700 outline-none" />
+          </Field>
+        </div>
+        <Field label="Address" hint="Used on the 1099 form">
+          <input value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} className="w-full px-3 py-2 rounded-md border border-stone-300 focus:border-amber-700 focus:ring-1 focus:ring-amber-700 outline-none" placeholder="123 Main St, Hot Springs, AR 71901" />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="TIN last 4" hint="Stored locally only">
+            <input value={form.tinLast4} maxLength={4} onChange={e => setForm({ ...form, tinLast4: e.target.value.replace(/\D/g,"") })} className="w-full px-3 py-2 rounded-md border border-stone-300 focus:border-amber-700 focus:ring-1 focus:ring-amber-700 outline-none font-mono" placeholder="1234" />
+          </Field>
+          <Field label="Category">
+            <select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} className="w-full px-3 py-2 rounded-md border border-stone-300 bg-white">
+              <option>Services</option>
+              <option>Maintenance</option>
+              <option>Landscaping</option>
+              <option>IT / Tech</option>
+              <option>Marketing</option>
+              <option>Professional</option>
+              <option>Other</option>
+            </select>
+          </Field>
+        </div>
+      </div>
+      <div className="flex justify-end gap-2 mt-6">
+        <button onClick={onClose} className="px-4 py-2 rounded-md border border-stone-300 hover:bg-stone-50 text-sm">Cancel</button>
+        <button onClick={() => onSave(form)} disabled={!ok} className="px-4 py-2 rounded-md bg-stone-900 hover:bg-stone-800 disabled:bg-stone-300 text-white text-sm">Save contractor</button>
+      </div>
+    </Modal>
+  );
+}
+
+function PaymentModal({ contractor, properties, onClose, onSave }) {
+  const [form, setForm] = useState({
+    date: iso(new Date()),
+    amount: "",
+    propertyId: properties[0]?.id || "",
+    memo: "",
+  });
+  const ok = Number(form.amount) > 0 && form.date && form.propertyId;
+  return (
+    <Modal open={true} onClose={onClose} size="md" title={`Log payment · ${contractor.name}`}>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Date" required>
+            <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} className="w-full px-3 py-2 rounded-md border border-stone-300 focus:border-amber-700 focus:ring-1 focus:ring-amber-700 outline-none" />
+          </Field>
+          <Field label="Amount" required>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500">$</span>
+              <input type="number" min="0" step="0.01" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} className="w-full pl-7 pr-3 py-2 rounded-md border border-stone-300 focus:border-amber-700 focus:ring-1 focus:ring-amber-700 outline-none tabular" placeholder="0.00" autoFocus />
+            </div>
+          </Field>
+        </div>
+        <Field label="Property" required>
+          <select value={form.propertyId} onChange={e => setForm({ ...form, propertyId: e.target.value })} className="w-full px-3 py-2 rounded-md border border-stone-300 bg-white">
+            {properties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Memo" hint="What this was for">
+          <input value={form.memo} onChange={e => setForm({ ...form, memo: e.target.value })} className="w-full px-3 py-2 rounded-md border border-stone-300 focus:border-amber-700 focus:ring-1 focus:ring-amber-700 outline-none" placeholder="Q1 lawn care" />
+        </Field>
+      </div>
+      <div className="flex justify-end gap-2 mt-6">
+        <button onClick={onClose} className="px-4 py-2 rounded-md border border-stone-300 hover:bg-stone-50 text-sm">Cancel</button>
+        <button onClick={() => onSave({ ...form, amount: Number(form.amount) })} disabled={!ok} className="px-4 py-2 rounded-md bg-amber-700 hover:bg-amber-800 disabled:bg-stone-300 text-white text-sm">Log payment</button>
+      </div>
+    </Modal>
   );
 }
 
