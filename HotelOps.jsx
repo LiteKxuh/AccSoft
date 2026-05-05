@@ -25,6 +25,21 @@ import {
   INVOICE_SCHEMA as _INVOICE_SCHEMA,
   AUDIT_SCHEMA as _AUDIT_SCHEMA,
 } from "./src/lib/excelImport.js";
+import {
+  DEFAULT_CHART as _DEFAULT_CHART,
+  TYPE_LABELS as _TYPE_LABELS,
+  SUBTYPE_LABELS as _SUBTYPE_LABELS,
+  buildLedger as _buildLedger,
+  trialBalance as _trialBalance,
+  balanceSheet as _balanceSheet,
+  cashFlow as _cashFlow,
+  accountActivity as _accountActivity,
+  reconcile as _reconcile,
+  entryTotals as _entryTotals,
+  isBalanced as _isBalanced,
+  bankAccounts as _bankAccounts,
+  findAccount as _findAccount,
+} from "./src/lib/gl.js";
 
 /* =========================================================================
    FONTS + GLOBAL STYLE
@@ -120,6 +135,10 @@ const SEED = {
   taxFilings: [],           // user-tracked filings
   contractors: [],          // 1099-NEC payees (separate from employees)
   contractorPayments: [],   // [{ id, contractorId, propertyId, date, amount, memo }]
+  journalEntries: [],       // manual journal entries (auto JEs are derived on the fly from reports/invoices/payroll)
+  chartOfAccounts: [],      // [] = use DEFAULT_CHART; populated lets users add custom accounts
+  bankStatements: [],       // imported bank statements
+  bankRecs: [],             // completed reconciliations
 };
 
 /* =========================================================================
@@ -4286,6 +4305,11 @@ function AccountingModule({ ctx }) {
             { id: "ingest", label: "Smart Ingest", icon: Upload, badge: "AI" },
             { id: "budget", label: "Budget", icon: DollarSign },
             { id: "pnl", label: "P&L", icon: Receipt },
+            { id: "balance-sheet", label: "Balance Sheet", icon: Receipt, badge: "GL" },
+            { id: "cashflow", label: "Cash Flow", icon: TrendingUp, badge: "GL" },
+            { id: "trial-balance", label: "Trial Balance", icon: ClipboardList, badge: "GL" },
+            { id: "journal", label: "Journal", icon: ClipboardList, badge: "GL" },
+            { id: "bankrec", label: "Bank Rec", icon: FileCheck2, badge: "GL" },
             { id: "ar", label: "A/R Aging", icon: Receipt },
             { id: "ap", label: "A/P", icon: Receipt },
             { id: "tax", label: "Tax Calendar", icon: Calendar },
@@ -4320,6 +4344,11 @@ function AccountingModule({ ctx }) {
       {tab === "ingest" && <IngestPane ctx={ctx} setTab={setTab} />}
       {tab === "budget" && <BudgetPane ctx={ctx} />}
       {tab === "pnl" && <PnlPane ctx={ctx} />}
+      {tab === "balance-sheet" && <BalanceSheetPane ctx={ctx} />}
+      {tab === "cashflow" && <CashFlowPane ctx={ctx} />}
+      {tab === "trial-balance" && <TrialBalancePane ctx={ctx} />}
+      {tab === "journal" && <JournalEntriesPane ctx={ctx} />}
+      {tab === "bankrec" && <BankRecPane ctx={ctx} />}
       {tab === "ap" && <ApPane ctx={ctx} />}
       {tab === "ar" && <ArAgingPane ctx={ctx} />}
       {tab === "tax" && <TaxCalendarPane ctx={ctx} />}
@@ -9398,6 +9427,1089 @@ function SubDeptList({ title, items }) {
           <span className="tabular font-bold">{fmtMoney(total)}</span>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* =========================================================================
+   GENERAL LEDGER — JOURNAL ENTRIES PANE
+   Manual + auto-derived journal entries, with full posting/voiding flow.
+   ========================================================================= */
+function useChart(state) {
+  return useMemo(() => {
+    const custom = state.chartOfAccounts || [];
+    if (!custom.length) return _DEFAULT_CHART;
+    // merge: custom overrides any default with the same code
+    const codes = new Set(custom.map(a => a.code));
+    return [..._DEFAULT_CHART.filter(a => !codes.has(a.code)), ...custom];
+  }, [state.chartOfAccounts]);
+}
+
+function useLedger(state) {
+  return useMemo(() => _buildLedger(state), [state.reports, state.invoices, state.vendors, state.payrollRuns, state.contractors, state.contractorPayments, state.journalEntries]);
+}
+
+function JournalEntriesPane({ ctx }) {
+  const { state, update, currentUser, perms, accessibleProperties, activeProperty, toast } = ctx;
+  const chart = useChart(state);
+  const ledger = useLedger(state);
+  const propIds = perms.properties === "all" ? accessibleProperties.map(p => p.id) : accessibleProperties.filter(p => p.id === activeProperty).map(p => p.id);
+
+  const [editing, setEditing] = useState(null);   // entry being edited or null
+  const [showSourceFilter, setSourceFilter] = useState("all"); // all | manual | auto-from-report | etc.
+  const [propFilter, setPropFilter] = useState(activeProperty || "all");
+  const [from, setFrom] = useState(iso(addDays(TODAY, -30)));
+  const [to, setTo] = useState(iso(TODAY));
+
+  const filtered = useMemo(() => {
+    return ledger
+      .filter(e => e.date >= from && e.date <= to)
+      .filter(e => showSourceFilter === "all" || e.source === showSourceFilter)
+      .filter(e => propFilter === "all" || e.propertyId === propFilter)
+      .filter(e => !e.propertyId || propIds.includes(e.propertyId))
+      .sort((a, b) => b.date.localeCompare(a.date) || (b.id || "").localeCompare(a.id || ""));
+  }, [ledger, from, to, showSourceFilter, propFilter, propIds]);
+
+  const totals = useMemo(() => {
+    let dr = 0, cr = 0;
+    filtered.forEach(e => e.lines?.forEach(l => { dr += +l.debit || 0; cr += +l.credit || 0; }));
+    return { dr, cr };
+  }, [filtered]);
+
+  const saveEntry = (draft) => {
+    const others = (state.journalEntries || []).filter(e => e.id !== draft.id);
+    const next = {
+      ...draft,
+      id: draft.id || newId("je"),
+      posted: !!draft.posted,
+      void: false,
+      createdAt: draft.createdAt || new Date().toISOString(),
+      createdBy: draft.createdBy || currentUser.id,
+      updatedAt: new Date().toISOString(),
+      updatedBy: currentUser.id,
+    };
+    update({ journalEntries: [...others, next] });
+    pushActivity(ctx, "journal.save", { id: next.id, posted: next.posted });
+    toast?.push?.(next.posted ? "Journal entry posted" : "Journal entry saved as draft", { tone: "success" });
+    setEditing(null);
+  };
+
+  const voidEntry = (id) => {
+    const next = (state.journalEntries || []).map(e =>
+      e.id === id ? { ...e, void: true, voidedAt: new Date().toISOString(), voidedBy: currentUser.id } : e
+    );
+    update({ journalEntries: next });
+    pushActivity(ctx, "journal.void", { id });
+    toast?.push?.("Journal entry voided", { tone: "warn" });
+  };
+
+  // Export
+  const exportRows = filtered.flatMap(e => (e.lines || []).map(l => ({
+    date: e.date,
+    entryId: e.id,
+    source: e.source || "manual",
+    description: e.description,
+    account: l.accountCode,
+    accountName: chart.find(a => a.code === l.accountCode)?.name || "—",
+    memo: l.memo || "",
+    debit: l.debit || 0,
+    credit: l.credit || 0,
+  })));
+  const exportColumns = [
+    { key: "date", label: "Date", type: "date", width: 12 },
+    { key: "entryId", label: "Entry ID", width: 18 },
+    { key: "source", label: "Source", width: 18 },
+    { key: "description", label: "Description", width: 28 },
+    { key: "account", label: "Account", width: 10 },
+    { key: "accountName", label: "Account Name", width: 22 },
+    { key: "memo", label: "Memo", width: 26 },
+    { key: "debit", label: "Debit", money: true, width: 14 },
+    { key: "credit", label: "Credit", money: true, width: 14 },
+  ];
+
+  return (
+    <div className="p-8 space-y-5 max-w-7xl mx-auto">
+      {editing && (
+        <JournalEntryModal
+          entry={editing}
+          chart={chart}
+          properties={accessibleProperties}
+          onClose={() => setEditing(null)}
+          onSave={saveEntry}
+        />
+      )}
+
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <div className="inline-flex items-center gap-2 mb-1">
+            <span className="text-amber-700 text-xs uppercase tracking-[0.2em] font-bold">General Ledger · Journal Entries</span>
+          </div>
+          <h2 className="font-display text-3xl text-stone-900">{filtered.length} entries · {fmtMoney(totals.dr)} posted</h2>
+          <p className="text-sm text-stone-500 mt-1">Auto-generated from posted reports, A/P, and payroll · plus your manual entries.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <_ExportMenu
+            filename="JournalEntries"
+            title="Journal Entries"
+            subtitle={`${from} to ${to}`}
+            summary={[
+              { label: "Total Debits", value: fmtMoney(totals.dr) },
+              { label: "Total Credits", value: fmtMoney(totals.cr) },
+              { label: "Diff", value: fmtMoney(totals.dr - totals.cr) },
+            ]}
+            footer="HotelOps · Journal"
+            columns={exportColumns}
+            rows={exportRows}
+          />
+          <Button variant="accent" onClick={() => setEditing({ date: iso(TODAY), propertyId: activeProperty || accessibleProperties[0]?.id, description: "", lines: [{ accountCode: "", debit: 0, credit: 0, memo: "" }, { accountCode: "", debit: 0, credit: 0, memo: "" }], posted: false })}>
+            <Plus size={14} /> New Entry
+          </Button>
+        </div>
+      </div>
+
+      <Card className="p-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <label className="block">
+            <span className="block text-[10px] uppercase tracking-wider text-stone-500 mb-1 font-bold">From</span>
+            <input type="date" value={from} onChange={e => setFrom(e.target.value)} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-md bg-white" />
+          </label>
+          <label className="block">
+            <span className="block text-[10px] uppercase tracking-wider text-stone-500 mb-1 font-bold">To</span>
+            <input type="date" value={to} onChange={e => setTo(e.target.value)} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-md bg-white" />
+          </label>
+          <label className="block">
+            <span className="block text-[10px] uppercase tracking-wider text-stone-500 mb-1 font-bold">Source</span>
+            <select value={showSourceFilter} onChange={e => setSourceFilter(e.target.value)} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-md bg-white">
+              <option value="all">All sources</option>
+              <option value="manual">Manual</option>
+              <option value="auto-from-report">Auto · Daily revenue</option>
+              <option value="auto-from-invoice">Auto · A/P bill</option>
+              <option value="auto-from-invoice-payment">Auto · A/P payment</option>
+              <option value="auto-from-payroll">Auto · Payroll</option>
+              <option value="auto-from-contractor">Auto · Contractor</option>
+            </select>
+          </label>
+          {accessibleProperties.length > 1 && (
+            <label className="block">
+              <span className="block text-[10px] uppercase tracking-wider text-stone-500 mb-1 font-bold">Property</span>
+              <select value={propFilter} onChange={e => setPropFilter(e.target.value)} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-md bg-white">
+                <option value="all">All properties</option>
+                {accessibleProperties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </label>
+          )}
+        </div>
+      </Card>
+
+      <Card className="overflow-hidden">
+        {filtered.length === 0 ? (
+          <Empty icon={Receipt} title="No journal entries in this range" message="Post a flash report or create a manual entry to populate the ledger." />
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="bg-stone-50 text-stone-500 text-xs uppercase tracking-wider">
+              <tr>
+                <th className="text-left px-4 py-3 font-medium w-24">Date</th>
+                <th className="text-left px-4 py-3 font-medium">Description</th>
+                <th className="text-left px-4 py-3 font-medium w-36">Source</th>
+                <th className="text-right px-4 py-3 font-medium w-32">Debits</th>
+                <th className="text-right px-4 py-3 font-medium w-32">Credits</th>
+                <th className="text-right px-4 py-3 font-medium w-24"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {filtered.slice(0, 200).map(e => {
+                const t = _entryTotals(e);
+                const isManual = e.source === "manual" || (!e.source);
+                return (
+                  <tr key={e.id} className={`hover:bg-amber-50/40 ${isManual ? "" : "text-stone-600"}`}>
+                    <td className="px-4 py-2.5 tabular text-stone-700">{fmtDate(e.date)}</td>
+                    <td className="px-4 py-2.5">
+                      <div className="text-stone-900 font-medium">{e.description}</div>
+                      <div className="text-[11px] text-stone-500 mt-0.5">
+                        {(e.lines || []).map((l, i) => {
+                          const acct = chart.find(a => a.code === l.accountCode);
+                          return (
+                            <span key={i} className="inline-block mr-3">
+                              <span className="font-mono">{l.accountCode}</span> {acct?.name || ""}
+                              {l.debit ? <span className="text-stone-700"> Dr {fmtMoney(l.debit)}</span> : null}
+                              {l.credit ? <span className="text-stone-700"> Cr {fmtMoney(l.credit)}</span> : null}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <SourceBadge source={e.source} />
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular">{fmtMoney(t.debit)}</td>
+                    <td className="px-4 py-2.5 text-right tabular">{fmtMoney(t.credit)}</td>
+                    <td className="px-4 py-2.5 text-right">
+                      {isManual ? (
+                        <div className="inline-flex gap-1">
+                          <button onClick={() => setEditing(e)} className="text-stone-500 hover:text-stone-900 p-1" title="Edit"><Edit2 size={13} /></button>
+                          <button onClick={() => voidEntry(e.id)} className="text-rose-500 hover:text-rose-800 p-1" title="Void"><Trash2 size={13} /></button>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-stone-400 uppercase tracking-wider">auto</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot className="bg-stone-900 text-white text-sm">
+              <tr>
+                <td colSpan={3} className="px-4 py-3 text-right font-semibold">Totals</td>
+                <td className="px-4 py-3 text-right tabular font-bold">{fmtMoney(totals.dr)}</td>
+                <td className="px-4 py-3 text-right tabular font-bold">{fmtMoney(totals.cr)}</td>
+                <td className={`px-4 py-3 text-right tabular text-xs ${Math.abs(totals.dr - totals.cr) < 0.01 ? "text-emerald-300" : "text-rose-300"}`}>
+                  {Math.abs(totals.dr - totals.cr) < 0.01 ? "Balanced" : "Unbalanced"}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function SourceBadge({ source }) {
+  const map = {
+    "manual": ["stone", "Manual"],
+    "auto-from-report": ["amber", "Daily revenue"],
+    "auto-from-invoice": ["violet", "A/P bill"],
+    "auto-from-invoice-payment": ["violet", "A/P payment"],
+    "auto-from-payroll": ["sky", "Payroll"],
+    "auto-from-contractor": ["sky", "1099"],
+    "bank-rec": ["emerald", "Bank rec"],
+  };
+  const [color, label] = map[source] || ["stone", source || "Manual"];
+  return <Badge color={color}>{label}</Badge>;
+}
+
+function JournalEntryModal({ entry, chart, properties, onClose, onSave }) {
+  const [draft, setDraft] = useState(() => JSON.parse(JSON.stringify(entry)));
+  const totals = _entryTotals(draft);
+
+  const setLine = (i, field, val) => {
+    const next = [...draft.lines];
+    next[i] = { ...next[i], [field]: val };
+    // entering debit clears credit and vice versa
+    if (field === "debit" && Number(val) > 0) next[i].credit = 0;
+    if (field === "credit" && Number(val) > 0) next[i].debit = 0;
+    setDraft({ ...draft, lines: next });
+  };
+  const addLine = () => setDraft({ ...draft, lines: [...draft.lines, { accountCode: "", debit: 0, credit: 0, memo: "" }] });
+  const delLine = (i) => setDraft({ ...draft, lines: draft.lines.filter((_, idx) => idx !== i) });
+
+  const canSave = totals.balanced && totals.debit > 0 && draft.description?.trim() && draft.lines.every(l => l.accountCode);
+
+  return (
+    <Modal open={true} onClose={onClose} title={draft.id ? "Edit Journal Entry" : "New Journal Entry"} size="xl">
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <Input label="Date" type="date" value={draft.date} onChange={v => setDraft({ ...draft, date: v })} />
+          {properties.length > 1 && (
+            <Select
+              label="Property"
+              value={draft.propertyId}
+              onChange={v => setDraft({ ...draft, propertyId: v })}
+              options={properties.map(p => ({ value: p.id, label: p.name }))}
+            />
+          )}
+          <Input label="Description" value={draft.description} onChange={v => setDraft({ ...draft, description: v })} placeholder="e.g. Depreciation expense, May 2026" />
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] uppercase tracking-wider text-stone-500 font-bold">Lines</span>
+            <button onClick={addLine} className="text-xs font-semibold text-amber-700 hover:text-amber-900 inline-flex items-center gap-1">
+              <Plus size={12} /> Add line
+            </button>
+          </div>
+          <div className="border border-stone-200 rounded-md overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
+                <tr>
+                  <th className="text-left px-3 py-2 font-semibold w-44">Account</th>
+                  <th className="text-left px-3 py-2 font-semibold">Memo</th>
+                  <th className="text-right px-3 py-2 font-semibold w-32">Debit</th>
+                  <th className="text-right px-3 py-2 font-semibold w-32">Credit</th>
+                  <th className="w-8"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-100">
+                {draft.lines.map((l, i) => (
+                  <tr key={i}>
+                    <td className="px-2 py-1.5">
+                      <select
+                        value={l.accountCode}
+                        onChange={e => setLine(i, "accountCode", e.target.value)}
+                        className="w-full px-2 py-1 text-xs border border-stone-300 rounded bg-white"
+                      >
+                        <option value="">— pick —</option>
+                        {chart.map(a => (
+                          <option key={a.code} value={a.code}>{a.code} · {a.name}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <input
+                        type="text"
+                        value={l.memo || ""}
+                        onChange={e => setLine(i, "memo", e.target.value)}
+                        className="w-full px-2 py-1 text-xs border border-stone-300 rounded bg-white"
+                        placeholder="—"
+                      />
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={l.debit || ""}
+                        onChange={e => setLine(i, "debit", Number(e.target.value) || 0)}
+                        className="w-full px-2 py-1 text-xs tabular text-right border border-stone-300 rounded bg-white"
+                      />
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={l.credit || ""}
+                        onChange={e => setLine(i, "credit", Number(e.target.value) || 0)}
+                        className="w-full px-2 py-1 text-xs tabular text-right border border-stone-300 rounded bg-white"
+                      />
+                    </td>
+                    <td className="px-1 text-center">
+                      <button onClick={() => delLine(i)} className="text-stone-400 hover:text-rose-600 p-1"><X size={12} /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-stone-900 text-white">
+                <tr>
+                  <td colSpan={2} className="px-3 py-2 text-right text-xs uppercase tracking-wider font-semibold">Totals</td>
+                  <td className="px-3 py-2 text-right tabular font-bold">{fmtMoney(totals.debit)}</td>
+                  <td className="px-3 py-2 text-right tabular font-bold">{fmtMoney(totals.credit)}</td>
+                  <td className={`text-center text-[10px] ${totals.balanced ? "text-emerald-300" : "text-rose-300"}`}>
+                    {totals.balanced && totals.debit > 0 ? "✓" : "Δ"}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          {!totals.balanced && totals.debit > 0 && (
+            <p className="text-xs text-rose-700 mt-1">Debits must equal credits. Off by {fmtMoney(Math.abs(totals.debit - totals.credit))}.</p>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between pt-2 border-t border-stone-200">
+          <label className="inline-flex items-center gap-2 text-sm text-stone-700">
+            <input type="checkbox" checked={!!draft.posted} onChange={e => setDraft({ ...draft, posted: e.target.checked })} className="rounded" />
+            Post immediately (uncheck to save as draft)
+          </label>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose}>Cancel</Button>
+            <Button variant="accent" onClick={() => onSave(draft)} disabled={!canSave}>Save</Button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* =========================================================================
+   TRIAL BALANCE PANE
+   ========================================================================= */
+function TrialBalancePane({ ctx }) {
+  const { state, perms, accessibleProperties, activeProperty } = ctx;
+  const chart = useChart(state);
+  const ledger = useLedger(state);
+
+  const [asOf, setAsOf] = useState(iso(TODAY));
+  const [propId, setPropId] = useState(perms.properties === "all" ? "all" : activeProperty);
+  const [hideZero, setHideZero] = useState(true);
+
+  const tb = useMemo(() => _trialBalance(ledger, asOf, propId === "all" ? null : propId, chart), [ledger, asOf, propId, chart]);
+  const visibleRows = hideZero ? tb.rows.filter(r => r.hasActivity) : tb.rows;
+
+  const grouped = useMemo(() => {
+    const out = {};
+    visibleRows.forEach(r => {
+      const k = r.account.type;
+      (out[k] = out[k] || []).push(r);
+    });
+    return out;
+  }, [visibleRows]);
+
+  const exportRows = visibleRows.map(r => ({
+    code: r.account.code,
+    name: r.account.name,
+    type: _TYPE_LABELS[r.account.type],
+    debit: r.debit,
+    credit: r.credit,
+    balance: r.balance,
+  }));
+
+  return (
+    <div className="p-8 space-y-5 max-w-5xl mx-auto">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <div className="inline-flex items-center gap-2 mb-1">
+            <span className="text-amber-700 text-xs uppercase tracking-[0.2em] font-bold">General Ledger · Trial Balance</span>
+          </div>
+          <h2 className="font-display text-3xl text-stone-900">As of {fmtDate(asOf)}</h2>
+          <p className="text-sm text-stone-500 mt-1">
+            Total debits <strong className="tabular text-stone-900">{fmtMoney(tb.totals.debit)}</strong> ·
+            Total credits <strong className="tabular text-stone-900">{fmtMoney(tb.totals.credit)}</strong>
+            {" · "}
+            {tb.totals.balanced ? <span className="text-emerald-700 font-semibold">In balance ✓</span> : <span className="text-rose-700 font-semibold">Off by {fmtMoney(Math.abs(tb.totals.diff))}</span>}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <input type="date" value={asOf} onChange={e => setAsOf(e.target.value)} className="px-3 py-2 text-sm border border-stone-300 rounded-md bg-white" />
+          {accessibleProperties.length > 1 && (
+            <select value={propId} onChange={e => setPropId(e.target.value)} className="px-3 py-2 text-sm border border-stone-300 rounded-md bg-white">
+              <option value="all">All properties</option>
+              {accessibleProperties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          )}
+          <label className="text-xs text-stone-600 inline-flex items-center gap-1.5">
+            <input type="checkbox" checked={hideZero} onChange={e => setHideZero(e.target.checked)} /> Hide zero-balance
+          </label>
+          <_ExportMenu
+            filename="TrialBalance"
+            title="Trial Balance"
+            subtitle={`As of ${asOf}${propId !== "all" ? " · " + accessibleProperties.find(p => p.id === propId)?.name : ""}`}
+            summary={[
+              { label: "Total Debits", value: fmtMoney(tb.totals.debit) },
+              { label: "Total Credits", value: fmtMoney(tb.totals.credit) },
+              { label: tb.totals.balanced ? "Balanced" : "Out of Balance", value: tb.totals.balanced ? "✓" : fmtMoney(Math.abs(tb.totals.diff)) },
+            ]}
+            footer="HotelOps · Trial Balance"
+            columns={[
+              { key: "code", label: "Code", width: 8 },
+              { key: "name", label: "Account", width: 28 },
+              { key: "type", label: "Type", width: 12 },
+              { key: "debit", label: "Debit", money: true, width: 14 },
+              { key: "credit", label: "Credit", money: true, width: 14 },
+              { key: "balance", label: "Balance", money: true, width: 16 },
+            ]}
+            rows={exportRows}
+          />
+        </div>
+      </div>
+
+      <Card className="overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-stone-50 text-stone-500 text-xs uppercase tracking-wider">
+            <tr>
+              <th className="text-left px-4 py-3 font-medium w-20">Code</th>
+              <th className="text-left px-4 py-3 font-medium">Account</th>
+              <th className="text-right px-4 py-3 font-medium w-32">Debit</th>
+              <th className="text-right px-4 py-3 font-medium w-32">Credit</th>
+              <th className="text-right px-4 py-3 font-medium w-36">Balance</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-stone-100">
+            {Object.entries(grouped).map(([type, rows]) => (
+              <FragmentBlock key={type} type={type} rows={rows} />
+            ))}
+          </tbody>
+          <tfoot className="bg-stone-900 text-white">
+            <tr>
+              <td colSpan={2} className="px-4 py-3 font-semibold uppercase text-xs tracking-wider">Total</td>
+              <td className="px-4 py-3 text-right tabular font-bold">{fmtMoney(tb.totals.debit)}</td>
+              <td className="px-4 py-3 text-right tabular font-bold">{fmtMoney(tb.totals.credit)}</td>
+              <td className="px-4 py-3 text-right">
+                <span className={`tabular text-xs px-2 py-1 rounded ${tb.totals.balanced ? "bg-emerald-700" : "bg-rose-700"}`}>
+                  {tb.totals.balanced ? "✓ Balanced" : `Δ ${fmtMoney(Math.abs(tb.totals.diff))}`}
+                </span>
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </Card>
+    </div>
+  );
+}
+
+function FragmentBlock({ type, rows }) {
+  const subtotal = rows.reduce((s, r) => s + r.balance, 0);
+  return (
+    <>
+      <tr className="bg-stone-100">
+        <td colSpan={5} className="px-4 py-1.5 text-[10px] uppercase tracking-widest text-stone-600 font-bold">{_TYPE_LABELS[type] || type}</td>
+      </tr>
+      {rows.map((r) => (
+        <tr key={r.account.code} className="hover:bg-amber-50/40">
+          <td className="px-4 py-1.5 font-mono text-stone-700 text-xs">{r.account.code}</td>
+          <td className="px-4 py-1.5 text-stone-900">{r.account.name}</td>
+          <td className="px-4 py-1.5 text-right tabular text-stone-700">{r.debit > 0 ? fmtMoney(r.debit) : <span className="text-stone-300">—</span>}</td>
+          <td className="px-4 py-1.5 text-right tabular text-stone-700">{r.credit > 0 ? fmtMoney(r.credit) : <span className="text-stone-300">—</span>}</td>
+          <td className="px-4 py-1.5 text-right tabular font-semibold text-stone-900">{fmtMoney(r.balance)}</td>
+        </tr>
+      ))}
+      <tr className="bg-stone-50">
+        <td colSpan={4} className="px-4 py-1.5 text-right text-xs font-semibold text-stone-600 uppercase tracking-wider">{_TYPE_LABELS[type] || type} subtotal</td>
+        <td className="px-4 py-1.5 text-right tabular font-bold text-stone-900">{fmtMoney(subtotal)}</td>
+      </tr>
+    </>
+  );
+}
+
+/* =========================================================================
+   BALANCE SHEET PANE
+   ========================================================================= */
+function BalanceSheetPane({ ctx }) {
+  const { state, perms, accessibleProperties, activeProperty } = ctx;
+  const chart = useChart(state);
+  const ledger = useLedger(state);
+
+  const [asOf, setAsOf] = useState(iso(TODAY));
+  const [propId, setPropId] = useState(perms.properties === "all" ? "all" : activeProperty);
+
+  const bs = useMemo(() => _balanceSheet(ledger, asOf, propId === "all" ? null : propId, chart), [ledger, asOf, propId, chart]);
+
+  const exportRows = [];
+  bs.assets.bySubtype.forEach(g => {
+    g.rows.forEach(r => exportRows.push({ section: "Assets", subtype: g.label, code: r.account.code, name: r.account.name, balance: r.balance }));
+  });
+  bs.liabilities.bySubtype.forEach(g => {
+    g.rows.forEach(r => exportRows.push({ section: "Liabilities", subtype: g.label, code: r.account.code, name: r.account.name, balance: r.balance }));
+  });
+  bs.equity.rows.forEach(r => exportRows.push({ section: "Equity", subtype: "Equity", code: r.account.code, name: r.account.name, balance: r.balance }));
+  exportRows.push({ section: "Equity", subtype: "Equity", code: "—", name: "Current period earnings", balance: bs.equity.currentEarnings });
+
+  return (
+    <div className="p-8 space-y-5 max-w-5xl mx-auto">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <div className="inline-flex items-center gap-2 mb-1">
+            <span className="text-amber-700 text-xs uppercase tracking-[0.2em] font-bold">Balance Sheet</span>
+          </div>
+          <h2 className="font-display text-3xl text-stone-900">As of {fmtDate(asOf)}</h2>
+          <p className="text-sm text-stone-500 mt-1">
+            Total assets <strong className="tabular text-stone-900">{fmtMoney(bs.totals.assets)}</strong>
+            {" · "}
+            Liabilities + Equity <strong className="tabular text-stone-900">{fmtMoney(bs.totals.liabilitiesAndEquity)}</strong>
+            {" · "}
+            {bs.totals.balanced ? <span className="text-emerald-700 font-semibold">In balance ✓</span> : <span className="text-rose-700 font-semibold">Off by {fmtMoney(Math.abs(bs.totals.diff))}</span>}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <input type="date" value={asOf} onChange={e => setAsOf(e.target.value)} className="px-3 py-2 text-sm border border-stone-300 rounded-md bg-white" />
+          {accessibleProperties.length > 1 && (
+            <select value={propId} onChange={e => setPropId(e.target.value)} className="px-3 py-2 text-sm border border-stone-300 rounded-md bg-white">
+              <option value="all">All properties</option>
+              {accessibleProperties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          )}
+          <_ExportMenu
+            filename="BalanceSheet"
+            title="Balance Sheet"
+            subtitle={`As of ${asOf}`}
+            summary={[
+              { label: "Assets", value: fmtMoney(bs.totals.assets) },
+              { label: "Liabilities", value: fmtMoney(bs.liabilities.total) },
+              { label: "Equity", value: fmtMoney(bs.equity.total) },
+            ]}
+            footer="HotelOps · Balance Sheet"
+            columns={[
+              { key: "section", label: "Section", width: 14 },
+              { key: "subtype", label: "Category", width: 22 },
+              { key: "code", label: "Code", width: 10 },
+              { key: "name", label: "Account", width: 28 },
+              { key: "balance", label: "Balance", money: true, width: 16 },
+            ]}
+            rows={exportRows}
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* ASSETS */}
+        <Card className="overflow-hidden">
+          <div className="px-5 py-3 bg-stone-900 text-white">
+            <h3 className="font-display text-lg">Assets</h3>
+          </div>
+          <table className="w-full text-sm">
+            <tbody className="divide-y divide-stone-100">
+              {bs.assets.bySubtype.map(g => (
+                <BsGroup key={g.subtype} g={g} />
+              ))}
+              <tr className="bg-stone-900 text-white">
+                <td className="px-4 py-2.5 font-semibold">Total Assets</td>
+                <td className="px-4 py-2.5 text-right tabular font-bold">{fmtMoney(bs.totals.assets)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </Card>
+
+        {/* LIAB + EQUITY */}
+        <Card className="overflow-hidden">
+          <div className="px-5 py-3 bg-stone-900 text-white">
+            <h3 className="font-display text-lg">Liabilities &amp; Equity</h3>
+          </div>
+          <table className="w-full text-sm">
+            <tbody className="divide-y divide-stone-100">
+              <tr className="bg-stone-100">
+                <td colSpan={2} className="px-4 py-1.5 text-[10px] uppercase tracking-widest text-stone-600 font-bold">Liabilities</td>
+              </tr>
+              {bs.liabilities.bySubtype.map(g => (
+                <BsGroup key={g.subtype} g={g} />
+              ))}
+              <tr className="bg-stone-50">
+                <td className="px-4 py-2 text-right text-xs font-semibold text-stone-600 uppercase tracking-wider">Total Liabilities</td>
+                <td className="px-4 py-2 text-right tabular font-bold text-stone-900">{fmtMoney(bs.liabilities.total)}</td>
+              </tr>
+
+              <tr className="bg-stone-100">
+                <td colSpan={2} className="px-4 py-1.5 text-[10px] uppercase tracking-widest text-stone-600 font-bold">Equity</td>
+              </tr>
+              {bs.equity.rows.map(r => (
+                <tr key={r.account.code} className="hover:bg-amber-50/40">
+                  <td className="px-4 py-1.5 text-stone-900 pl-8">
+                    <span className="font-mono text-xs text-stone-500 mr-2">{r.account.code}</span>
+                    {r.account.name}
+                  </td>
+                  <td className="px-4 py-1.5 text-right tabular">{fmtMoney(r.balance)}</td>
+                </tr>
+              ))}
+              <tr className="hover:bg-amber-50/40">
+                <td className="px-4 py-1.5 text-stone-900 pl-8">
+                  <span className="font-mono text-xs text-stone-500 mr-2">—</span>
+                  Current period earnings
+                </td>
+                <td className="px-4 py-1.5 text-right tabular">{fmtMoney(bs.equity.currentEarnings)}</td>
+              </tr>
+              <tr className="bg-stone-50">
+                <td className="px-4 py-2 text-right text-xs font-semibold text-stone-600 uppercase tracking-wider">Total Equity</td>
+                <td className="px-4 py-2 text-right tabular font-bold text-stone-900">{fmtMoney(bs.equity.total)}</td>
+              </tr>
+
+              <tr className="bg-stone-900 text-white">
+                <td className="px-4 py-2.5 font-semibold">Total Liabilities &amp; Equity</td>
+                <td className="px-4 py-2.5 text-right tabular font-bold">{fmtMoney(bs.totals.liabilitiesAndEquity)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </Card>
+      </div>
+
+      {!bs.totals.balanced && (
+        <Card className="p-5 bg-amber-50 border-amber-200">
+          <div className="flex gap-3">
+            <AlertCircle size={18} className="text-amber-700 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-stone-800">
+              <strong className="text-stone-900">Balance sheet is off by {fmtMoney(Math.abs(bs.totals.diff))}.</strong> This usually means an unposted journal, an opening-balance journal entry needed, or a property filter that excludes counterparty entries. Check the Trial Balance for the offending account.
+            </div>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function BsGroup({ g }) {
+  return (
+    <>
+      <tr className="bg-stone-50">
+        <td colSpan={2} className="px-4 py-1.5 text-[10px] uppercase tracking-wider text-stone-500 font-bold">{g.label}</td>
+      </tr>
+      {g.rows.filter(r => r.hasActivity || Math.abs(r.balance) > 0.005).map(r => (
+        <tr key={r.account.code} className="hover:bg-amber-50/40">
+          <td className="px-4 py-1.5 text-stone-900 pl-8">
+            <span className="font-mono text-xs text-stone-500 mr-2">{r.account.code}</span>
+            {r.account.name}
+          </td>
+          <td className="px-4 py-1.5 text-right tabular">{fmtMoney(r.balance)}</td>
+        </tr>
+      ))}
+      <tr className="bg-stone-50/40">
+        <td className="px-4 py-1 pl-8 text-xs italic text-stone-500">{g.label} subtotal</td>
+        <td className="px-4 py-1 text-right tabular text-stone-700 text-xs italic">{fmtMoney(g.total)}</td>
+      </tr>
+    </>
+  );
+}
+
+/* =========================================================================
+   CASH FLOW PANE — indirect method
+   ========================================================================= */
+function CashFlowPane({ ctx }) {
+  const { state, perms, accessibleProperties, activeProperty } = ctx;
+  const chart = useChart(state);
+  const ledger = useLedger(state);
+
+  const today = TODAY;
+  const defaultMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+  const [month, setMonth] = useState(defaultMonth);
+  const [propId, setPropId] = useState(perms.properties === "all" ? "all" : activeProperty);
+
+  const period = useMemo(() => {
+    const [yy, mm] = month.split("-").map(Number);
+    const start = `${month}-01`;
+    const end = iso(new Date(yy, mm, 0));
+    return { start, end };
+  }, [month]);
+
+  const cf = useMemo(() => _cashFlow(ledger, period, propId === "all" ? null : propId, chart), [ledger, period, propId, chart]);
+
+  const Line = ({ label, value, indent, isTotal, isNegative }) => {
+    const display = value < 0 ? `(${fmtMoney(Math.abs(value))})` : fmtMoney(value);
+    return (
+      <tr className={isTotal ? "bg-stone-900 text-white font-semibold" : "hover:bg-amber-50/40"}>
+        <td className={`px-4 py-2 ${indent ? "pl-8" : "font-medium"} ${isTotal ? "text-white" : "text-stone-900"}`}>{label}</td>
+        <td className={`px-4 py-2 text-right tabular ${isTotal ? "text-white" : value < 0 ? "text-rose-700" : "text-stone-900"}`}>{display}</td>
+      </tr>
+    );
+  };
+
+  const exportRows = [
+    { section: "Operating", line: "Net Income", amount: cf.operating.netIncome },
+    { section: "Operating", line: "Depreciation (non-cash)", amount: cf.operating.depreciation },
+    { section: "Operating", line: "Δ Accounts Receivable", amount: cf.operating.arChange },
+    { section: "Operating", line: "Δ Inventory", amount: cf.operating.invChange },
+    { section: "Operating", line: "Δ Prepaid Expenses", amount: cf.operating.prepaidChange },
+    { section: "Operating", line: "Δ Accounts Payable", amount: cf.operating.apChange },
+    { section: "Operating", line: "Δ Accrued Liabilities", amount: cf.operating.accruedChange },
+    { section: "Operating", line: "Net Cash from Operating", amount: cf.operating.total },
+    { section: "Investing", line: "PP&E Acquisitions", amount: cf.investing.ppe },
+    { section: "Investing", line: "Net Cash from Investing", amount: cf.investing.total },
+    { section: "Financing", line: "Δ Long-Term Debt", amount: cf.financing.ltd },
+    { section: "Financing", line: "Δ Equity / Distributions", amount: cf.financing.equity },
+    { section: "Financing", line: "Net Cash from Financing", amount: cf.financing.total },
+    { section: "Summary", line: "Net Change in Cash", amount: cf.netChange },
+    { section: "Summary", line: "Cash, Beginning of Period", amount: cf.cashStart },
+    { section: "Summary", line: "Cash, End of Period (computed)", amount: cf.derivedCashEnd },
+    { section: "Summary", line: "Cash, End of Period (per ledger)", amount: cf.cashEnd },
+  ];
+
+  return (
+    <div className="p-8 space-y-5 max-w-4xl mx-auto">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <div className="inline-flex items-center gap-2 mb-1">
+            <span className="text-amber-700 text-xs uppercase tracking-[0.2em] font-bold">Statement of Cash Flows · Indirect Method</span>
+          </div>
+          <h2 className="font-display text-3xl text-stone-900">{month}</h2>
+          <p className="text-sm text-stone-500 mt-1">
+            Net change in cash: <strong className={`tabular ${cf.netChange >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{fmtMoney(cf.netChange)}</strong>
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <input type="month" value={month} onChange={e => setMonth(e.target.value)} className="px-3 py-2 text-sm border border-stone-300 rounded-md bg-white tabular" />
+          {accessibleProperties.length > 1 && (
+            <select value={propId} onChange={e => setPropId(e.target.value)} className="px-3 py-2 text-sm border border-stone-300 rounded-md bg-white">
+              <option value="all">All properties</option>
+              {accessibleProperties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          )}
+          <_ExportMenu
+            filename={`CashFlow_${month}`}
+            title={`Statement of Cash Flows · ${month}`}
+            subtitle="Indirect method"
+            summary={[
+              { label: "Operating", value: fmtMoney(cf.operating.total) },
+              { label: "Investing", value: fmtMoney(cf.investing.total) },
+              { label: "Financing", value: fmtMoney(cf.financing.total) },
+              { label: "Net Change", value: fmtMoney(cf.netChange) },
+            ]}
+            footer="HotelOps · Cash Flow"
+            columns={[
+              { key: "section", label: "Section", width: 16 },
+              { key: "line", label: "Line", width: 36 },
+              { key: "amount", label: "Amount", money: true, width: 16 },
+            ]}
+            rows={exportRows}
+          />
+        </div>
+      </div>
+
+      <Card className="overflow-hidden">
+        <table className="w-full text-sm">
+          <tbody className="divide-y divide-stone-100">
+            <tr className="bg-stone-100">
+              <td colSpan={2} className="px-4 py-2 text-[11px] uppercase tracking-widest text-stone-600 font-bold">Operating Activities</td>
+            </tr>
+            <Line label="Net Income" value={cf.operating.netIncome} indent />
+            <Line label="Depreciation (non-cash)" value={cf.operating.depreciation} indent />
+            <Line label="Δ Accounts Receivable" value={cf.operating.arChange} indent />
+            <Line label="Δ Inventory" value={cf.operating.invChange} indent />
+            <Line label="Δ Prepaid Expenses" value={cf.operating.prepaidChange} indent />
+            <Line label="Δ Accounts Payable" value={cf.operating.apChange} indent />
+            <Line label="Δ Accrued Liabilities" value={cf.operating.accruedChange} indent />
+            <Line label="Net Cash from Operating" value={cf.operating.total} isTotal />
+
+            <tr className="bg-stone-100">
+              <td colSpan={2} className="px-4 py-2 text-[11px] uppercase tracking-widest text-stone-600 font-bold">Investing Activities</td>
+            </tr>
+            <Line label="Property, Plant & Equipment" value={cf.investing.ppe} indent />
+            <Line label="Net Cash from Investing" value={cf.investing.total} isTotal />
+
+            <tr className="bg-stone-100">
+              <td colSpan={2} className="px-4 py-2 text-[11px] uppercase tracking-widest text-stone-600 font-bold">Financing Activities</td>
+            </tr>
+            <Line label="Δ Long-Term Debt" value={cf.financing.ltd} indent />
+            <Line label="Δ Equity / Distributions" value={cf.financing.equity} indent />
+            <Line label="Net Cash from Financing" value={cf.financing.total} isTotal />
+
+            <tr className="bg-amber-50">
+              <td colSpan={2} className="px-4 py-2 text-[11px] uppercase tracking-widest text-amber-800 font-bold">Reconciliation</td>
+            </tr>
+            <Line label="Net Change in Cash" value={cf.netChange} indent />
+            <Line label="Cash, Beginning of Period" value={cf.cashStart} indent />
+            <Line label="Cash, End of Period (computed)" value={cf.derivedCashEnd} indent />
+            <Line label="Cash, End of Period (per ledger)" value={cf.cashEnd} isTotal />
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+}
+
+/* =========================================================================
+   BANK RECONCILIATION PANE
+   ========================================================================= */
+function BankRecPane({ ctx }) {
+  const { state, update, currentUser, perms, accessibleProperties, activeProperty, toast } = ctx;
+  const chart = useChart(state);
+  const ledger = useLedger(state);
+  const banks = _bankAccounts(chart);
+
+  const [bankCode, setBankCode] = useState(banks[0]?.code || "1020");
+  const [asOf, setAsOf] = useState(iso(TODAY));
+  const [statementBalance, setStatementBalance] = useState(0);
+  const [showImport, setShowImport] = useState(false);
+  const [imported, setImported] = useState([]);   // bank statement transactions in memory
+
+  const rec = useMemo(
+    () => _reconcile(ledger, bankCode, imported, asOf),
+    [ledger, bankCode, imported, asOf]
+  );
+
+  const adjustedBalance = rec.ledgerBalance + rec.outstandingBank.reduce((s, b) => s + b.amount, 0) - rec.outstandingLedger.reduce((s, l) => s + l.amount, 0);
+  const reconciled = Math.abs((Number(statementBalance) || 0) - adjustedBalance) < 0.01;
+
+  const handleStatementImport = (rows) => {
+    const txns = rows.map((r, i) => ({
+      id: `bt_${Date.now()}_${i}`,
+      date: r.date,
+      amount: r.amount,
+      description: r.description || r.memo || "",
+      type: (r.amount || 0) >= 0 ? "deposit" : "debit",
+    })).filter(t => t.date && Number.isFinite(t.amount));
+    setImported(txns);
+    if (txns.length) toast?.push?.(`Imported ${txns.length} bank transactions`, { tone: "success" });
+  };
+
+  const finalizeReconciliation = () => {
+    const recId = newId("rec");
+    const next = {
+      id: recId,
+      bankAccountCode: bankCode,
+      asOfDate: asOf,
+      statementBalance: Number(statementBalance) || 0,
+      ledgerBalance: rec.ledgerBalance,
+      adjustedBalance,
+      reconciledAt: new Date().toISOString(),
+      reconciledBy: currentUser.id,
+      matchedCount: rec.matchedPairs.length,
+      outstandingBankCount: rec.outstandingBank.length,
+      outstandingLedgerCount: rec.outstandingLedger.length,
+    };
+    update({ bankRecs: [next, ...(state.bankRecs || [])] });
+    pushActivity(ctx, "bankrec.finalize", { id: recId, bankCode, asOf });
+    toast?.push?.("Reconciliation saved", { tone: "success" });
+  };
+
+  return (
+    <div className="p-8 space-y-5 max-w-7xl mx-auto">
+      <_ImportExcelDialog
+        open={showImport}
+        onClose={() => setShowImport(false)}
+        title={`Import Bank Statement · ${chart.find(a => a.code === bankCode)?.name || bankCode}`}
+        subtitle="Map your statement's columns. Positive amounts = deposits, negative = debits."
+        helpText="Required columns: Date, Amount. Optional: Description / Memo. Most banks export this format directly."
+        schema={[
+          { key: "date", label: "Date", type: "date", aliases: ["transaction date", "posted date", "post date"], required: true },
+          { key: "amount", label: "Amount", type: "money", aliases: ["debit/credit", "transaction amount", "value"], required: true },
+          { key: "description", label: "Description", aliases: ["memo", "details", "narrative", "merchant"], required: false },
+        ]}
+        onImport={handleStatementImport}
+      />
+
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <div className="inline-flex items-center gap-2 mb-1">
+            <span className="text-amber-700 text-xs uppercase tracking-[0.2em] font-bold">Bank Reconciliation</span>
+          </div>
+          <h2 className="font-display text-3xl text-stone-900">{chart.find(a => a.code === bankCode)?.name || bankCode}</h2>
+          <p className="text-sm text-stone-500 mt-1">
+            Per ledger: <strong className="tabular text-stone-900">{fmtMoney(rec.ledgerBalance)}</strong>
+            {" · "}Adjusted: <strong className="tabular text-stone-900">{fmtMoney(adjustedBalance)}</strong>
+            {" · "}Statement: <strong className="tabular text-stone-900">{fmtMoney(Number(statementBalance) || 0)}</strong>
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <select value={bankCode} onChange={e => setBankCode(e.target.value)} className="px-3 py-2 text-sm border border-stone-300 rounded-md bg-white">
+            {banks.map(b => <option key={b.code} value={b.code}>{b.code} · {b.name}</option>)}
+          </select>
+          <input type="date" value={asOf} onChange={e => setAsOf(e.target.value)} className="px-3 py-2 text-sm border border-stone-300 rounded-md bg-white" />
+          <Button variant="secondary" onClick={() => setShowImport(true)}><Upload size={14} />Import Statement</Button>
+          <Button
+            variant={reconciled ? "success" : "accent"}
+            disabled={!imported.length || !reconciled}
+            onClick={finalizeReconciliation}
+          >
+            <CheckCircle2 size={14} />
+            {reconciled ? "Save Reconciliation" : "Match required to finalize"}
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <Card className="p-4">
+          <div className="text-xs uppercase tracking-wider text-stone-500 font-semibold mb-1.5">Statement Balance</div>
+          <input
+            type="number"
+            step="0.01"
+            value={statementBalance}
+            onChange={e => setStatementBalance(e.target.value)}
+            className="w-full font-display number-display text-2xl text-stone-900 font-semibold tabular bg-transparent border-0 focus:outline-none focus:bg-amber-50 rounded px-1 -mx-1"
+            placeholder="0.00"
+          />
+          <div className="text-xs text-stone-500 mt-1">Enter your bank statement's ending balance</div>
+        </Card>
+        <Card className="p-4">
+          <div className="text-xs uppercase tracking-wider text-stone-500 font-semibold mb-1.5">Adjusted Ledger</div>
+          <div className="font-display number-display text-2xl text-stone-900 font-semibold">{fmtMoney(adjustedBalance)}</div>
+          <div className="text-xs text-stone-500 mt-1">Ledger ± outstanding</div>
+        </Card>
+        <Card className="p-4">
+          <div className="text-xs uppercase tracking-wider text-stone-500 font-semibold mb-1.5">Outstanding</div>
+          <div className="font-display number-display text-2xl text-stone-900 font-semibold">{rec.outstandingBank.length + rec.outstandingLedger.length}</div>
+          <div className="text-xs text-stone-500 mt-1">{rec.outstandingBank.length} bank · {rec.outstandingLedger.length} ledger</div>
+        </Card>
+        <Card className={`p-4 ${reconciled ? "bg-emerald-50 border-emerald-200" : ""}`}>
+          <div className="text-xs uppercase tracking-wider text-stone-500 font-semibold mb-1.5">Status</div>
+          <div className={`font-display number-display text-2xl font-semibold ${reconciled ? "text-emerald-700" : "text-amber-700"}`}>
+            {reconciled ? "Balanced ✓" : "Δ " + fmtMoney(Math.abs((Number(statementBalance) || 0) - adjustedBalance))}
+          </div>
+          <div className="text-xs text-stone-500 mt-1">
+            {imported.length === 0 ? "Import a statement to begin" : reconciled ? "Ready to finalize" : "Adjust statement balance or match items"}
+          </div>
+        </Card>
+      </div>
+
+      {/* Matched */}
+      {rec.matchedPairs.length > 0 && (
+        <Card className="overflow-hidden">
+          <div className="px-5 py-3 border-b border-stone-200 bg-emerald-50">
+            <h3 className="font-display text-lg text-stone-900">Matched · {rec.matchedPairs.length}</h3>
+          </div>
+          <table className="w-full text-sm">
+            <thead className="bg-stone-50 text-stone-500 text-xs uppercase tracking-wider">
+              <tr>
+                <th className="text-left px-4 py-2 font-medium">Date</th>
+                <th className="text-left px-4 py-2 font-medium">Bank Description</th>
+                <th className="text-left px-4 py-2 font-medium">Ledger Source</th>
+                <th className="text-right px-4 py-2 font-medium">Amount</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {rec.matchedPairs.slice(0, 80).map((m, i) => (
+                <tr key={i} className="hover:bg-stone-50">
+                  <td className="px-4 py-1.5 tabular text-stone-700">{fmtDate(m.bank.date)}</td>
+                  <td className="px-4 py-1.5 text-stone-700">{m.bank.description || "—"}</td>
+                  <td className="px-4 py-1.5 text-stone-500 text-xs font-mono">{m.ledger.entryId}</td>
+                  <td className="px-4 py-1.5 text-right tabular font-semibold">{fmtMoney(m.bank.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
+      {/* Outstanding */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <Card className="overflow-hidden">
+          <div className="px-5 py-3 border-b border-stone-200 bg-amber-50">
+            <h3 className="font-display text-lg text-stone-900">In Bank, not in Ledger · {rec.outstandingBank.length}</h3>
+            <p className="text-xs text-stone-500 mt-0.5">These transactions need to be entered as journals.</p>
+          </div>
+          {rec.outstandingBank.length === 0 ? (
+            <Empty icon={CheckCircle2} title="None" message="Every bank transaction has a matching ledger entry." />
+          ) : (
+            <table className="w-full text-sm">
+              <tbody className="divide-y divide-stone-100">
+                {rec.outstandingBank.slice(0, 80).map((b, i) => (
+                  <tr key={i} className="hover:bg-stone-50">
+                    <td className="px-4 py-1.5 tabular text-stone-700 w-24">{fmtDate(b.date)}</td>
+                    <td className="px-4 py-1.5 text-stone-700">{b.description || "—"}</td>
+                    <td className={`px-4 py-1.5 text-right tabular font-semibold ${b.amount >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{fmtMoney(b.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+        <Card className="overflow-hidden">
+          <div className="px-5 py-3 border-b border-stone-200 bg-amber-50">
+            <h3 className="font-display text-lg text-stone-900">In Ledger, not yet on Bank · {rec.outstandingLedger.length}</h3>
+            <p className="text-xs text-stone-500 mt-0.5">Outstanding deposits or checks.</p>
+          </div>
+          {rec.outstandingLedger.length === 0 ? (
+            <Empty icon={CheckCircle2} title="None" message="Every ledger entry has cleared the bank." />
+          ) : (
+            <table className="w-full text-sm">
+              <tbody className="divide-y divide-stone-100">
+                {rec.outstandingLedger.slice(0, 80).map((l, i) => (
+                  <tr key={i} className="hover:bg-stone-50">
+                    <td className="px-4 py-1.5 tabular text-stone-700 w-24">{fmtDate(l.date)}</td>
+                    <td className="px-4 py-1.5 text-stone-700">{l.description || "—"}</td>
+                    <td className={`px-4 py-1.5 text-right tabular font-semibold ${l.amount >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{fmtMoney(l.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      </div>
+
+      {state.bankRecs?.length > 0 && (
+        <Card>
+          <div className="px-5 py-3 border-b border-stone-200">
+            <h3 className="font-display text-lg text-stone-900">Reconciliation history</h3>
+          </div>
+          <table className="w-full text-sm">
+            <thead className="bg-stone-50 text-stone-500 text-xs uppercase tracking-wider">
+              <tr>
+                <th className="text-left px-4 py-2 font-medium">As of</th>
+                <th className="text-left px-4 py-2 font-medium">Bank</th>
+                <th className="text-right px-4 py-2 font-medium">Statement Bal</th>
+                <th className="text-right px-4 py-2 font-medium">Ledger Bal</th>
+                <th className="text-right px-4 py-2 font-medium">Matched</th>
+                <th className="text-left px-4 py-2 font-medium">Reconciled</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {state.bankRecs.slice(0, 12).map(r => (
+                <tr key={r.id} className="hover:bg-stone-50">
+                  <td className="px-4 py-1.5 tabular text-stone-700">{fmtDate(r.asOfDate)}</td>
+                  <td className="px-4 py-1.5 text-stone-700">{chart.find(a => a.code === r.bankAccountCode)?.name}</td>
+                  <td className="px-4 py-1.5 text-right tabular">{fmtMoney(r.statementBalance)}</td>
+                  <td className="px-4 py-1.5 text-right tabular">{fmtMoney(r.ledgerBalance)}</td>
+                  <td className="px-4 py-1.5 text-right tabular">{r.matchedCount}</td>
+                  <td className="px-4 py-1.5 text-stone-500 text-xs">{fmtDate(r.reconciledAt?.slice(0, 10))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
     </div>
   );
 }
