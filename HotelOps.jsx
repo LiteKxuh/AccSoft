@@ -39,6 +39,14 @@ import {
   isBalanced as _isBalanced,
   bankAccounts as _bankAccounts,
   findAccount as _findAccount,
+  backfillJournalEntries as _backfillJournalEntries,
+  isJournalLocked as _isJournalLocked,
+  withTenant as _withTenant,
+  DEFAULT_TENANT_ID as _DEFAULT_TENANT_ID,
+  makeReportJournal as _makeReportJournal,
+  makeInvoiceJournals as _makeInvoiceJournals,
+  makePayrollJournal as _makePayrollJournal,
+  makeContractorJournal as _makeContractorJournal,
 } from "./src/lib/gl.js";
 import { ScheduleExportMenu as _ScheduleExportMenu } from "./src/lib/ScheduleExportMenu.jsx";
 import {
@@ -402,6 +410,27 @@ export default function HotelOps() {
         if (!merged.taxFilings) merged.taxFilings = [];
         if (!merged.contractors) merged.contractors = [];
         if (!merged.contractorPayments) merged.contractorPayments = [];
+        if (!merged.journalEntries) merged.journalEntries = [];
+        if (!merged.chartOfAccounts) merged.chartOfAccounts = [];
+        if (!merged.bankStatements) merged.bankStatements = [];
+        if (!merged.bankRecs) merged.bankRecs = [];
+        // ----- Ledger backfill: persist any auto-derivable JEs that haven't been
+        // materialized yet. From v1.4.0 onward, JEs are persisted at post time;
+        // existing data gets backfilled here on first load after upgrade.
+        try {
+          const backfilled = _backfillJournalEntries(merged);
+          if (backfilled.length) {
+            merged.journalEntries = [...(merged.journalEntries || []), ...backfilled];
+            console.log(`[HotelOps] Backfilled ${backfilled.length} journal entries from existing reports/invoices/payroll`);
+          }
+        } catch (e) {
+          console.error("[HotelOps] JE backfill failed", e);
+        }
+        // ----- Tenancy scaffolding: stamp every record with tenantId for future cloud migration
+        const TENANT_KEYS = ["properties", "employees", "shifts", "schedule", "writeups", "documents", "reports", "budgets", "activity", "closedPeriods", "vendors", "invoices", "ptoRequests", "payrollRuns", "taxFilings", "contractors", "contractorPayments", "journalEntries", "bankStatements", "bankRecs"];
+        TENANT_KEYS.forEach((k) => {
+          if (Array.isArray(merged[k])) merged[k] = merged[k].map(r => _withTenant(r));
+        });
         setState(merged);
         setCurrentUserId(saved.currentUserId || null);
         setActiveProperty(saved.activeProperty || "p1");
@@ -511,8 +540,48 @@ export default function HotelOps() {
     return state.properties.filter(p => currentUser.propertyAccess.includes(p.id));
   }, [currentUser, state.properties]);
 
-  // State mutators
-  const update = (partial) => setState(s => ({ ...s, ...partial }));
+  // State mutators — wraps setState with auto-persistence of journal entries
+  // for every report / invoice / payroll run / contractor payment that's added
+  // or modified. JEs are immutable once posted (subject to period-close rules).
+  const update = (partial) => setState((s) => {
+    const merged = { ...s, ...partial };
+    // Build a fast lookup of every JE we already have, keyed by source+sourceId
+    const seen = new Set();
+    (merged.journalEntries || []).forEach((j) => {
+      if (j.source && j.sourceId) seen.add(`${j.source}::${j.sourceId}`);
+    });
+    const newJEs = [];
+    const append = (jes) => {
+      jes.forEach((j) => {
+        const k = `${j.source}::${j.sourceId}`;
+        if (seen.has(k)) return;
+        seen.add(k);
+        newJEs.push(_withTenant(j));
+      });
+    };
+    if (Array.isArray(partial.reports)) {
+      partial.reports.forEach(r => append(_makeReportJournal(r)));
+    }
+    if (Array.isArray(partial.invoices)) {
+      partial.invoices.forEach((inv) => {
+        const v = (merged.vendors || []).find(x => x.id === inv.vendorId);
+        append(_makeInvoiceJournals(inv, v));
+      });
+    }
+    if (Array.isArray(partial.payrollRuns)) {
+      partial.payrollRuns.forEach(run => append(_makePayrollJournal(run)));
+    }
+    if (Array.isArray(partial.contractorPayments)) {
+      partial.contractorPayments.forEach((p) => {
+        const c = (merged.contractors || []).find(x => x.id === p.contractorId);
+        append(_makeContractorJournal(p, c));
+      });
+    }
+    if (newJEs.length) {
+      merged.journalEntries = [...(merged.journalEntries || []), ...newJEs];
+    }
+    return merged;
+  });
 
   if (!loaded) {
     return (
@@ -9875,17 +9944,29 @@ function JournalEntriesPane({ ctx }) {
   }, [filtered]);
 
   const saveEntry = (draft) => {
+    // Period-close immutability check
+    if (_isJournalLocked(draft, state.closedPeriods)) {
+      toast?.push?.(`Cannot save: ${draft.date.slice(0, 7)} is a closed period. Re-open from Reconcile to make changes.`, { tone: "error", duration: 6000 });
+      return;
+    }
+    // Prevent edits to auto-derived (system) entries — these are immutable
+    const isAutoEntry = draft.source && draft.source.startsWith("auto-");
+    if (isAutoEntry && draft.id && (state.journalEntries || []).some(e => e.id === draft.id)) {
+      toast?.push?.("Auto-generated journals can't be edited directly. Edit the source record (report / invoice / payroll run) instead.", { tone: "error", duration: 6000 });
+      return;
+    }
     const others = (state.journalEntries || []).filter(e => e.id !== draft.id);
-    const next = {
+    const next = _withTenant({
       ...draft,
       id: draft.id || newId("je"),
       posted: !!draft.posted,
       void: false,
+      source: draft.source || "manual",
       createdAt: draft.createdAt || new Date().toISOString(),
       createdBy: draft.createdBy || currentUser.id,
       updatedAt: new Date().toISOString(),
       updatedBy: currentUser.id,
-    };
+    });
     update({ journalEntries: [...others, next] });
     pushActivity(ctx, "journal.save", { id: next.id, posted: next.posted });
     toast?.push?.(next.posted ? "Journal entry posted" : "Journal entry saved as draft", { tone: "success" });
@@ -9893,6 +9974,12 @@ function JournalEntriesPane({ ctx }) {
   };
 
   const voidEntry = (id) => {
+    const target = (state.journalEntries || []).find(e => e.id === id);
+    if (!target) return;
+    if (_isJournalLocked(target, state.closedPeriods)) {
+      toast?.push?.(`Cannot void: ${String(target.date).slice(0, 7)} is a closed period.`, { tone: "error", duration: 5000 });
+      return;
+    }
     const next = (state.journalEntries || []).map(e =>
       e.id === id ? { ...e, void: true, voidedAt: new Date().toISOString(), voidedBy: currentUser.id } : e
     );
@@ -10072,9 +10159,13 @@ function JournalEntriesPane({ ctx }) {
               {filtered.slice(0, 200).map(e => {
                 const t = _entryTotals(e);
                 const isManual = e.source === "manual" || (!e.source);
+                const locked = _isJournalLocked(e, state.closedPeriods);
                 return (
                   <tr key={e.id} className={`hover:bg-amber-50/40 ${isManual ? "" : "text-stone-600"}`}>
-                    <td className="px-4 py-2.5 tabular text-stone-700">{fmtDate(e.date)}</td>
+                    <td className="px-4 py-2.5 tabular text-stone-700">
+                      {fmtDate(e.date)}
+                      {locked && <Shield size={11} className="inline ml-1 text-stone-400" />}
+                    </td>
                     <td className="px-4 py-2.5">
                       <div className="text-stone-900 font-medium">{e.description}</div>
                       <div className="text-[11px] text-stone-500 mt-0.5">
@@ -10096,7 +10187,9 @@ function JournalEntriesPane({ ctx }) {
                     <td className="px-4 py-2.5 text-right tabular">{fmtMoney(t.debit)}</td>
                     <td className="px-4 py-2.5 text-right tabular">{fmtMoney(t.credit)}</td>
                     <td className="px-4 py-2.5 text-right">
-                      {isManual ? (
+                      {locked ? (
+                        <span className="text-[10px] text-stone-400 uppercase tracking-wider" title="Period closed — locked">locked</span>
+                      ) : isManual ? (
                         <div className="inline-flex gap-1">
                           <button onClick={() => setEditing(e)} className="text-stone-500 hover:text-stone-900 p-1" title="Edit"><Edit2 size={13} /></button>
                           <button onClick={() => voidEntry(e.id)} className="text-rose-500 hover:text-rose-800 p-1" title="Void"><Trash2 size={13} /></button>

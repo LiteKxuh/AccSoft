@@ -110,6 +110,32 @@ export const SUBTYPE_LABELS = {
   "fixed-expense":         "Fixed Charges",
 };
 
+/* ---------- Period close immutability ---------- */
+
+/**
+ * True if the given JE date + property falls in a closed period and edits
+ * should be blocked. Pass state.closedPeriods directly.
+ */
+export function isJournalLocked(journalEntry, closedPeriods) {
+  if (!journalEntry?.date) return false;
+  const month = String(journalEntry.date).slice(0, 7);
+  return (closedPeriods || []).some(c => c.month === month && (!journalEntry.propertyId || !c.propertyId || c.propertyId === journalEntry.propertyId));
+}
+
+/* ---------- Tenancy scaffolding ---------- */
+
+export const DEFAULT_TENANT_ID = "t_default";
+
+/**
+ * Stamp a record with the default tenant so future cloud migration is
+ * mechanical. Idempotent.
+ */
+export function withTenant(record, tenantId = DEFAULT_TENANT_ID) {
+  if (!record) return record;
+  if (record.tenantId) return record;
+  return { ...record, tenantId };
+}
+
 /* ---------- Account lookup helpers ---------- */
 
 export function findAccount(chart, idOrCode) {
@@ -150,7 +176,7 @@ export function entryTotals(entry) {
  * Convert a posted flash report into a balanced journal entry.
  * Debits cash/cc/AR for the settlement; credits revenue accounts and tax liabilities.
  */
-function reportToJournal(report) {
+export function reportToJournal(report) {
   const b = report.breakdown || {};
   const lines = [];
 
@@ -171,9 +197,15 @@ function reportToJournal(report) {
     if (cc > 0)    lines.push({ accountCode: "1120", debit: cc,    credit: 0, memo: "Credit card settlement" });
     if (ar > 0)    lines.push({ accountCode: "1110", debit: ar,    credit: 0, memo: "City ledger / direct bill" });
     if (other > 0) lines.push({ accountCode: "1010", debit: other, credit: 0, memo: "Other payment" });
-    // If settlement < revenue+tax, plug the rest to AR
+    // Reconcile settlement vs revenue+tax so the JE always balances
     const gap = totalDr - totalSettlement;
-    if (gap > 0.005) lines.push({ accountCode: "1110", debit: gap, credit: 0, memo: "AR plug (settlement gap)" });
+    if (gap > 0.005) {
+      // Settlement < revenue+tax → outstanding receivable
+      lines.push({ accountCode: "1110", debit: gap, credit: 0, memo: "AR plug (settlement gap)" });
+    } else if (gap < -0.005) {
+      // Settlement > revenue+tax → advance deposit / unearned revenue
+      lines.push({ accountCode: "2400", debit: 0, credit: -gap, memo: "Advance deposit / unearned revenue" });
+    }
   } else if (totalDr > 0) {
     // No settlement detail — debit cash for the full revenue+tax
     lines.push({ accountCode: "1010", debit: totalDr, credit: 0, memo: "Daily takings (settlement detail unknown)" });
@@ -214,7 +246,7 @@ function reportToJournal(report) {
  * Open invoice: Dr expense, Cr A/P
  * Paid invoice: Dr A/P, Cr Cash
  */
-function invoiceToJournals(invoice, vendor) {
+export function invoiceToJournals(invoice, vendor) {
   const out = [];
   const expenseAccount = vendor?.glAccount || "9999";
   // Bill received: Dr expense, Cr A/P
@@ -256,7 +288,7 @@ function invoiceToJournals(invoice, vendor) {
  * Convert a posted payroll run into a journal entry.
  * Dr Wages expense, Dr Payroll Tax expense, Cr Cash, Cr Tax payable.
  */
-function payrollRunToJournal(run) {
+export function payrollRunToJournal(run) {
   const lines = [];
   const totalGross = (run.lines || []).reduce((s, l) => s + (l.gross || 0), 0);
   const totalFedWh = (run.lines || []).reduce((s, l) => s + (l.fedWithheld || 0), 0);
@@ -292,7 +324,7 @@ function payrollRunToJournal(run) {
   };
 }
 
-function contractorPaymentToJournal(p, contractor) {
+export function contractorPaymentToJournal(p, contractor) {
   return {
     id: `auto-cp-${p.id}`,
     date: p.date,
@@ -309,40 +341,121 @@ function contractorPaymentToJournal(p, contractor) {
 }
 
 /**
- * Build the unified ledger: every journal entry, both auto-derived and
- * user-entered, in one list with normalized line shape.
+ * Build the unified ledger: every persisted journal entry from
+ * state.journalEntries, plus on-the-fly derivation for any source records
+ * that haven't been backfilled yet (covers older saved state files).
+ *
+ * After v1.4.0, reports / invoices / payroll / contractor payments are
+ * persisted into state.journalEntries on post via the appendAutoJournal
+ * helper, so this falls back to derivation only for legacy data.
  *
  * @param {object} state
  * @returns {Array} ledger entries with .lines containing {accountCode, debit, credit, memo}
  */
 export function buildLedger(state) {
   const out = [];
-  // Auto: reports → daily revenue posting
-  (state.reports || []).forEach((r) => {
-    const j = reportToJournal(r);
-    if (j.lines.length) out.push(j);
-  });
-  // Auto: invoices (bill + payment legs)
-  (state.invoices || []).forEach((inv) => {
-    const v = (state.vendors || []).find(x => x.id === inv.vendorId);
-    invoiceToJournals(inv, v).forEach(j => out.push(j));
-  });
-  // Auto: payroll runs
-  (state.payrollRuns || []).forEach((run) => {
-    const j = payrollRunToJournal(run);
-    if (j) out.push(j);
-  });
-  // Auto: contractor payments
-  (state.contractorPayments || []).forEach((p) => {
-    const c = (state.contractors || []).find(x => x.id === p.contractorId);
-    out.push(contractorPaymentToJournal(p, c));
-  });
-  // Manual: user-entered journal entries
+  const persistedSourceIds = new Set();
   (state.journalEntries || []).forEach((j) => {
     if (j.void) return;
     out.push({ ...j, source: j.source || "manual" });
+    if (j.sourceId) persistedSourceIds.add(`${j.source}::${j.sourceId}`);
+  });
+
+  // Legacy fallback: derive any source records that don't already have a persisted JE
+  (state.reports || []).forEach((r) => {
+    if (persistedSourceIds.has(`auto-from-report::${r.id}`)) return;
+    const j = reportToJournal(r);
+    if (j.lines.length) out.push(j);
+  });
+  (state.invoices || []).forEach((inv) => {
+    const v = (state.vendors || []).find(x => x.id === inv.vendorId);
+    invoiceToJournals(inv, v).forEach((j) => {
+      if (persistedSourceIds.has(`${j.source}::${inv.id}`)) return;
+      out.push(j);
+    });
+  });
+  (state.payrollRuns || []).forEach((run) => {
+    if (persistedSourceIds.has(`auto-from-payroll::${run.id}`)) return;
+    const j = payrollRunToJournal(run);
+    if (j) out.push(j);
+  });
+  (state.contractorPayments || []).forEach((p) => {
+    if (persistedSourceIds.has(`auto-from-contractor::${p.id}`)) return;
+    const c = (state.contractors || []).find(x => x.id === p.contractorId);
+    out.push(contractorPaymentToJournal(p, c));
   });
   return out;
+}
+
+/**
+ * One-time migration helper: scan all source records and produce JE entries
+ * for any that don't already exist in state.journalEntries. Called once on
+ * app boot so ledger history becomes immutable from that point forward.
+ */
+export function backfillJournalEntries(state) {
+  const existing = new Set();
+  (state.journalEntries || []).forEach((j) => {
+    if (j.sourceId && j.source) existing.add(`${j.source}::${j.sourceId}`);
+  });
+  const out = [];
+  const stamp = new Date().toISOString();
+  const make = (j) => ({
+    ...j,
+    posted: true,
+    persistedAt: stamp,
+    backfilled: true,
+    void: false,
+  });
+  (state.reports || []).forEach((r) => {
+    if (existing.has(`auto-from-report::${r.id}`)) return;
+    const j = reportToJournal(r);
+    if (j.lines.length) out.push(make(j));
+  });
+  (state.invoices || []).forEach((inv) => {
+    const v = (state.vendors || []).find(x => x.id === inv.vendorId);
+    invoiceToJournals(inv, v).forEach((j) => {
+      if (existing.has(`${j.source}::${inv.id}`)) return;
+      out.push(make(j));
+    });
+  });
+  (state.payrollRuns || []).forEach((run) => {
+    if (existing.has(`auto-from-payroll::${run.id}`)) return;
+    const j = payrollRunToJournal(run);
+    if (j) out.push(make(j));
+  });
+  (state.contractorPayments || []).forEach((p) => {
+    if (existing.has(`auto-from-contractor::${p.id}`)) return;
+    const c = (state.contractors || []).find(x => x.id === p.contractorId);
+    out.push(make(contractorPaymentToJournal(p, c)));
+  });
+  return out;
+}
+
+/**
+ * Hooks for live persistence. Call from the same code path that posts a
+ * report / invoice / payroll run / contractor payment so the JE lands in
+ * state.journalEntries at creation time, not on next render.
+ *
+ * Each helper returns the JE(s) to append; nulls / empty arrays mean nothing
+ * to persist (e.g. a $0 invoice).
+ */
+export function makeReportJournal(report) {
+  const j = reportToJournal(report);
+  return j.lines.length ? [{ ...j, posted: true, persistedAt: new Date().toISOString() }] : [];
+}
+
+export function makeInvoiceJournals(invoice, vendor) {
+  return invoiceToJournals(invoice, vendor).map(j => ({ ...j, posted: true, persistedAt: new Date().toISOString() }));
+}
+
+export function makePayrollJournal(run) {
+  const j = payrollRunToJournal(run);
+  return j ? [{ ...j, posted: true, persistedAt: new Date().toISOString() }] : [];
+}
+
+export function makeContractorJournal(payment, contractor) {
+  const j = contractorPaymentToJournal(payment, contractor);
+  return j ? [{ ...j, posted: true, persistedAt: new Date().toISOString() }] : [];
 }
 
 /* ---------- Trial balance ---------- */
