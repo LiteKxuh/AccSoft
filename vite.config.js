@@ -24,11 +24,7 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
-    sourcemap: true,
+    sourcemap: false,
     emptyOutDir: true,
-    // Disable minification temporarily so production stack traces map
-    // back to the original variable names — finding TDZ bugs in a 9k-line
-    // component is impossible against `xQ`/`q0`/`v`.
-    minify: false,
   },
 });

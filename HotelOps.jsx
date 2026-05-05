@@ -640,6 +640,9 @@ export default function HotelOps() {
     return off;
   }, []);
 
+  const currentUser = state.employees.find(e => e.id === currentUserId);
+  const perms = currentUser ? ROLE_PERMS[currentUser.role] : null;
+
   // Register dynamic global-search commands (employees, vendors, properties)
   useEffect(() => {
     if (!loaded || !currentUser) return;
@@ -681,9 +684,6 @@ export default function HotelOps() {
     });
     return () => { cancelled = true; };
   }, [state, currentUserId, activeProperty, view, loaded]);
-
-  const currentUser = state.employees.find(e => e.id === currentUserId);
-  const perms = currentUser ? ROLE_PERMS[currentUser.role] : null;
 
   // Derived: properties accessible to current user
   const accessibleProperties = useMemo(() => {

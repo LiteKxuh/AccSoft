@@ -47,9 +47,6 @@ function createMainWindow() {
     mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html")).catch((err) => {
       console.error("Failed to load production bundle:", err);
     });
-    // Open DevTools in packaged builds while we stabilize the renderer.
-    // Roll back when the app boots cleanly on first launch in the field.
-    mainWindow.webContents.openDevTools({ mode: "detach" });
   }
 
   // Surface renderer load failures (script 404s, syntax errors at parse time)
