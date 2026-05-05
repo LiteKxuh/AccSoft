@@ -1962,6 +1962,9 @@ function Dashboard({ ctx }) {
         <KpiCard label="On Shift Now" value={clockedIn.length} sub={`${todaySchedule.length} scheduled today`} />
       </div>
 
+      {/* Financial position — pulled live from the GL */}
+      <FinancialPositionStrip ctx={ctx} />
+
       {/* Labor & productivity */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <LaborTile label="Labor Cost % (7d)" value={`${(labor.ratio * 100).toFixed(1)}%`} ratio={labor.ratio} />
@@ -2338,6 +2341,97 @@ function LiveTicker({ propIds, state }) {
           <span className="text-stone-500 uppercase tracking-wider">Reports</span>{" "}
           <span className="font-display tabular text-white font-semibold">{state.reports.filter(r => propIds.includes(r.propertyId)).length}</span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function FinancialPositionStrip({ ctx }) {
+  const { state, perms, accessibleProperties, activeProperty, setView } = ctx;
+  const chart = useChart(state);
+  const ledger = useLedger(state);
+  const propId = perms.properties === "all" ? null : activeProperty;
+  const today = iso(TODAY);
+  const monthStart = today.slice(0, 7) + "-01";
+
+  // Cash position from BS
+  const bs = useMemo(() => _balanceSheet(ledger, today, propId, chart), [ledger, propId, chart]);
+  const cashRows = bs.assets.rows.filter(r => ["1010", "1020", "1030", "1040"].includes(r.account.code));
+  const cash = cashRows.reduce((s, r) => s + r.balance, 0);
+
+  // A/R from BS
+  const arRows = bs.assets.rows.filter(r => ["1100", "1110", "1120"].includes(r.account.code));
+  const ar = arRows.reduce((s, r) => s + r.balance, 0);
+
+  // A/P from BS
+  const apRow = bs.liabilities.rows.find(r => r.account.code === "2010");
+  const ap = apRow?.balance || 0;
+
+  // MTD revenue/expense from ledger
+  const mtdPnL = useMemo(() => {
+    let revenue = 0, expense = 0;
+    ledger.forEach((entry) => {
+      if (!entry.posted) return;
+      if (entry.date < monthStart || entry.date > today) return;
+      if (propId && entry.propertyId && entry.propertyId !== propId) return;
+      (entry.lines || []).forEach((l) => {
+        const acct = chart.find(a => a.code === String(l.accountCode));
+        if (!acct) return;
+        if (acct.type === "revenue") revenue += (Number(l.credit) || 0) - (Number(l.debit) || 0);
+        if (acct.type === "expense") expense += (Number(l.debit) || 0) - (Number(l.credit) || 0);
+      });
+    });
+    return { revenue, expense, netIncome: revenue - expense };
+  }, [ledger, monthStart, today, propId, chart]);
+
+  const Tile = ({ label, value, sub, tone, onClick }) => (
+    <Card
+      className={`p-5 ${onClick ? "cursor-pointer hover:shadow-md transition-shadow" : ""}`}
+      onClick={onClick}
+    >
+      <div className="text-xs uppercase tracking-wider text-stone-500 font-semibold mb-2">{label}</div>
+      <div className={`font-display number-display text-2xl font-semibold ${tone || "text-stone-900"}`}>{value}</div>
+      <div className="text-xs text-stone-500 mt-1">{sub}</div>
+    </Card>
+  );
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-xs uppercase tracking-[0.2em] text-amber-700 font-bold">Financial Position · Live from GL</h3>
+        <button
+          onClick={() => { setView("accounting"); _commandBus.emit("balance-sheet:open"); }}
+          className="text-xs text-stone-500 hover:text-stone-900 font-medium"
+        >
+          See Balance Sheet →
+        </button>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <Tile
+          label="Cash on Hand"
+          value={fmtMoneyShort(cash)}
+          sub={cashRows.length ? `${cashRows.length} bank accounts` : "Set up bank accounts in GL"}
+          tone={cash >= 0 ? "text-emerald-700" : "text-rose-700"}
+          onClick={() => { setView("accounting"); _commandBus.emit("bankrec:open"); }}
+        />
+        <Tile
+          label="A/R Outstanding"
+          value={fmtMoneyShort(ar)}
+          sub="City ledger + credit cards"
+          tone={ar > 0 ? "text-amber-700" : "text-stone-900"}
+        />
+        <Tile
+          label="A/P Open"
+          value={fmtMoneyShort(ap)}
+          sub="Owed to vendors"
+          tone={ap > 0 ? "text-rose-700" : "text-stone-900"}
+        />
+        <Tile
+          label={`Net Income · ${monthStart.slice(0, 7)}`}
+          value={fmtMoneyShort(mtdPnL.netIncome)}
+          sub={`${fmtMoneyShort(mtdPnL.revenue)} rev − ${fmtMoneyShort(mtdPnL.expense)} exp`}
+          tone={mtdPnL.netIncome >= 0 ? "text-emerald-700" : "text-rose-700"}
+        />
       </div>
     </div>
   );
@@ -4292,6 +4386,11 @@ function AccountingModule({ ctx }) {
       if (cmd === "ingest:open") setTab("ingest");
       else if (cmd === "flash:open") setTab("flash");
       else if (cmd === "portfolio:open") setTab("portfolio");
+      else if (cmd === "balance-sheet:open") setTab("balance-sheet");
+      else if (cmd === "trial-balance:open") setTab("trial-balance");
+      else if (cmd === "journal:open") setTab("journal");
+      else if (cmd === "bankrec:open") setTab("bankrec");
+      else if (cmd === "cashflow:open") setTab("cashflow");
     });
     return off;
   }, []);
@@ -9432,6 +9531,110 @@ function SubDeptList({ title, items }) {
 }
 
 /* =========================================================================
+   ACCOUNT ACTIVITY MODAL — drill-down from Trial Balance / Balance Sheet
+   ========================================================================= */
+function AccountActivityModal({ open, onClose, account, ledger, propertyId, range }) {
+  const [from, setFrom] = useState(range?.start || iso(addDays(TODAY, -90)));
+  const [to, setTo] = useState(range?.end || iso(TODAY));
+  const lines = useMemo(() => {
+    if (!account) return [];
+    return _accountActivity(ledger, account.code, { start: from, end: to }, propertyId === "all" ? null : propertyId);
+  }, [account, ledger, from, to, propertyId]);
+
+  const totals = useMemo(() => {
+    const dr = lines.reduce((s, l) => s + l.debit, 0);
+    const cr = lines.reduce((s, l) => s + l.credit, 0);
+    return { dr, cr, net: account?.normal === "debit" ? dr - cr : cr - dr };
+  }, [lines, account]);
+
+  if (!open || !account) return null;
+
+  const exportColumns = [
+    { key: "date", label: "Date", type: "date", width: 12 },
+    { key: "description", label: "Description", width: 28 },
+    { key: "memo", label: "Memo", width: 24 },
+    { key: "source", label: "Source", width: 18 },
+    { key: "entryId", label: "Entry ID", width: 18 },
+    { key: "debit", label: "Debit", money: true, width: 14 },
+    { key: "credit", label: "Credit", money: true, width: 14 },
+    { key: "runningBalance", label: "Running Balance", money: true, width: 16 },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900 bg-opacity-60 font-body" onClick={onClose}>
+      <div className="bg-white rounded-lg shadow-2xl w-full max-w-5xl max-h-screen overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-stone-200">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.2em] text-amber-700 font-bold">Account Activity</div>
+            <h3 className="font-display text-xl text-stone-900">
+              <span className="font-mono text-base text-stone-500 mr-2">{account.code}</span>
+              {account.name}
+            </h3>
+            <p className="text-xs text-stone-500 mt-0.5">{_TYPE_LABELS[account.type]} · {_SUBTYPE_LABELS[account.subtype] || account.subtype} · {lines.length} posting lines</p>
+          </div>
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-700"><X size={20} /></button>
+        </div>
+
+        <div className="flex items-center justify-between px-6 py-3 border-b border-stone-200 bg-stone-50 flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <input type="date" value={from} onChange={e => setFrom(e.target.value)} className="px-2 py-1 text-xs border border-stone-300 rounded bg-white" />
+            <span className="text-xs text-stone-500">to</span>
+            <input type="date" value={to} onChange={e => setTo(e.target.value)} className="px-2 py-1 text-xs border border-stone-300 rounded bg-white" />
+          </div>
+          <div className="flex items-center gap-3 text-xs">
+            <span><span className="text-stone-500">Debits:</span> <strong className="tabular text-stone-900">{fmtMoney(totals.dr)}</strong></span>
+            <span><span className="text-stone-500">Credits:</span> <strong className="tabular text-stone-900">{fmtMoney(totals.cr)}</strong></span>
+            <span><span className="text-stone-500">Net:</span> <strong className="tabular text-stone-900">{fmtMoney(totals.net)}</strong></span>
+            <_ExportMenu
+              filename={`Account_${account.code}_${account.name.replace(/\s+/g, "_")}`}
+              title={`Account · ${account.code} ${account.name}`}
+              subtitle={`${from} to ${to}`}
+              size="sm"
+              columns={exportColumns}
+              rows={lines}
+            />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-auto">
+          {lines.length === 0 ? (
+            <Empty icon={ClipboardList} title="No activity in this range" message="Try widening the date filter or checking for a different property." />
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="bg-stone-50 text-stone-500 text-xs uppercase tracking-wider sticky top-0">
+                <tr>
+                  <th className="text-left px-4 py-2 font-medium w-24">Date</th>
+                  <th className="text-left px-4 py-2 font-medium">Description / Memo</th>
+                  <th className="text-left px-4 py-2 font-medium w-32">Source</th>
+                  <th className="text-right px-4 py-2 font-medium w-28">Debit</th>
+                  <th className="text-right px-4 py-2 font-medium w-28">Credit</th>
+                  <th className="text-right px-4 py-2 font-medium w-32">Balance</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-100">
+                {lines.map((l, i) => (
+                  <tr key={i} className="hover:bg-amber-50/40">
+                    <td className="px-4 py-1.5 tabular text-stone-700">{fmtDate(l.date)}</td>
+                    <td className="px-4 py-1.5">
+                      <div className="text-stone-900">{l.description}</div>
+                      {l.memo && <div className="text-[11px] text-stone-500">{l.memo}</div>}
+                    </td>
+                    <td className="px-4 py-1.5"><SourceBadge source={l.source} /></td>
+                    <td className="px-4 py-1.5 text-right tabular">{l.debit > 0 ? fmtMoney(l.debit) : <span className="text-stone-300">—</span>}</td>
+                    <td className="px-4 py-1.5 text-right tabular">{l.credit > 0 ? fmtMoney(l.credit) : <span className="text-stone-300">—</span>}</td>
+                    <td className="px-4 py-1.5 text-right tabular font-semibold text-stone-900">{fmtMoney(l.runningBalance)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================================
    GENERAL LEDGER — JOURNAL ENTRIES PANE
    Manual + auto-derived journal entries, with full posting/voiding flow.
    ========================================================================= */
@@ -9503,6 +9706,57 @@ function JournalEntriesPane({ ctx }) {
     toast?.push?.("Journal entry voided", { tone: "warn" });
   };
 
+  const generateRecurring = () => {
+    const recurring = (state.journalEntries || []).filter(e => e.recurring && !e.void && e.posted);
+    if (!recurring.length) {
+      toast?.push?.("No recurring journal templates yet — create a JE and set Recurring on it.", { tone: "info", duration: 5000 });
+      return;
+    }
+    // Group by template: pick the latest occurrence of each unique (description+lines signature)
+    const sigOf = (e) => `${e.description}::${(e.lines || []).map(l => `${l.accountCode}:${l.debit||0}:${l.credit||0}`).join("|")}`;
+    const latestByTemplate = {};
+    recurring.forEach(e => {
+      const k = sigOf(e);
+      if (!latestByTemplate[k] || latestByTemplate[k].date < e.date) latestByTemplate[k] = e;
+    });
+    const today = new Date();
+    const newOnes = [];
+    Object.values(latestByTemplate).forEach(template => {
+      const lastDate = new Date(template.date);
+      let nextDate;
+      if (template.recurring === "monthly") {
+        nextDate = new Date(lastDate.getFullYear(), lastDate.getMonth() + 1, lastDate.getDate());
+      } else if (template.recurring === "quarterly") {
+        nextDate = new Date(lastDate.getFullYear(), lastDate.getMonth() + 3, lastDate.getDate());
+      } else if (template.recurring === "yearly") {
+        nextDate = new Date(lastDate.getFullYear() + 1, lastDate.getMonth(), lastDate.getDate());
+      }
+      if (!nextDate || nextDate > today) return;
+      const newDateStr = iso(nextDate);
+      // Check if a JE already exists for this template + date
+      const exists = recurring.find(e => sigOf(e) === sigOf(template) && e.date === newDateStr);
+      if (exists) return;
+      newOnes.push({
+        ...template,
+        id: newId("je"),
+        date: newDateStr,
+        sourceTemplateId: template.id,
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser.id,
+        updatedAt: new Date().toISOString(),
+        updatedBy: currentUser.id,
+        // posted: keep the template's posted status
+      });
+    });
+    if (!newOnes.length) {
+      toast?.push?.("Recurring entries are already up to date.", { tone: "info" });
+      return;
+    }
+    update({ journalEntries: [...(state.journalEntries || []), ...newOnes] });
+    pushActivity(ctx, "journal.generate-recurring", { count: newOnes.length });
+    toast?.push?.(`Generated ${newOnes.length} recurring journal entr${newOnes.length === 1 ? "y" : "ies"}`, { tone: "success" });
+  };
+
   // Export
   const exportRows = filtered.flatMap(e => (e.lines || []).map(l => ({
     date: e.date,
@@ -9548,6 +9802,9 @@ function JournalEntriesPane({ ctx }) {
           <p className="text-sm text-stone-500 mt-1">Auto-generated from posted reports, A/P, and payroll · plus your manual entries.</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={generateRecurring} title="Auto-create overdue copies of all recurring journal templates">
+            <Play size={14} /> Run Recurring
+          </Button>
           <_ExportMenu
             filename="JournalEntries"
             title="Journal Entries"
@@ -9804,11 +10061,26 @@ function JournalEntryModal({ entry, chart, properties, onClose, onSave }) {
           )}
         </div>
 
-        <div className="flex items-center justify-between pt-2 border-t border-stone-200">
-          <label className="inline-flex items-center gap-2 text-sm text-stone-700">
-            <input type="checkbox" checked={!!draft.posted} onChange={e => setDraft({ ...draft, posted: e.target.checked })} className="rounded" />
-            Post immediately (uncheck to save as draft)
-          </label>
+        <div className="flex items-center justify-between pt-2 border-t border-stone-200 flex-wrap gap-3">
+          <div className="flex items-center gap-4 text-sm text-stone-700">
+            <label className="inline-flex items-center gap-2">
+              <input type="checkbox" checked={!!draft.posted} onChange={e => setDraft({ ...draft, posted: e.target.checked })} className="rounded" />
+              Post immediately
+            </label>
+            <label className="inline-flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider text-stone-500 font-medium">Recurring</span>
+              <select
+                value={draft.recurring || ""}
+                onChange={e => setDraft({ ...draft, recurring: e.target.value || null })}
+                className="px-2 py-1 text-xs border border-stone-300 rounded bg-white"
+              >
+                <option value="">— No</option>
+                <option value="monthly">Every month</option>
+                <option value="quarterly">Every quarter</option>
+                <option value="yearly">Every year</option>
+              </select>
+            </label>
+          </div>
           <div className="flex gap-2">
             <Button variant="ghost" onClick={onClose}>Cancel</Button>
             <Button variant="accent" onClick={() => onSave(draft)} disabled={!canSave}>Save</Button>
@@ -9830,6 +10102,7 @@ function TrialBalancePane({ ctx }) {
   const [asOf, setAsOf] = useState(iso(TODAY));
   const [propId, setPropId] = useState(perms.properties === "all" ? "all" : activeProperty);
   const [hideZero, setHideZero] = useState(true);
+  const [drillAccount, setDrillAccount] = useState(null);
 
   const tb = useMemo(() => _trialBalance(ledger, asOf, propId === "all" ? null : propId, chart), [ledger, asOf, propId, chart]);
   const visibleRows = hideZero ? tb.rows.filter(r => r.hasActivity) : tb.rows;
@@ -9902,6 +10175,14 @@ function TrialBalancePane({ ctx }) {
       </div>
 
       <Card className="overflow-hidden">
+        <AccountActivityModal
+          open={!!drillAccount}
+          onClose={() => setDrillAccount(null)}
+          account={drillAccount}
+          ledger={ledger}
+          propertyId={propId}
+          range={{ start: iso(addDays(new Date(asOf), -90)), end: asOf }}
+        />
         <table className="w-full text-sm">
           <thead className="bg-stone-50 text-stone-500 text-xs uppercase tracking-wider">
             <tr>
@@ -9914,7 +10195,7 @@ function TrialBalancePane({ ctx }) {
           </thead>
           <tbody className="divide-y divide-stone-100">
             {Object.entries(grouped).map(([type, rows]) => (
-              <FragmentBlock key={type} type={type} rows={rows} />
+              <FragmentBlock key={type} type={type} rows={rows} onDrill={setDrillAccount} />
             ))}
           </tbody>
           <tfoot className="bg-stone-900 text-white">
@@ -9935,7 +10216,7 @@ function TrialBalancePane({ ctx }) {
   );
 }
 
-function FragmentBlock({ type, rows }) {
+function FragmentBlock({ type, rows, onDrill }) {
   const subtotal = rows.reduce((s, r) => s + r.balance, 0);
   return (
     <>
@@ -9943,9 +10224,17 @@ function FragmentBlock({ type, rows }) {
         <td colSpan={5} className="px-4 py-1.5 text-[10px] uppercase tracking-widest text-stone-600 font-bold">{_TYPE_LABELS[type] || type}</td>
       </tr>
       {rows.map((r) => (
-        <tr key={r.account.code} className="hover:bg-amber-50/40">
+        <tr
+          key={r.account.code}
+          className={`hover:bg-amber-50/40 ${onDrill ? "cursor-pointer" : ""}`}
+          onClick={() => onDrill?.(r.account)}
+          title={onDrill ? "Click to drill into account activity" : undefined}
+        >
           <td className="px-4 py-1.5 font-mono text-stone-700 text-xs">{r.account.code}</td>
-          <td className="px-4 py-1.5 text-stone-900">{r.account.name}</td>
+          <td className="px-4 py-1.5 text-stone-900">
+            {r.account.name}
+            {onDrill && r.hasActivity && <ChevronRight size={12} className="inline ml-1 text-stone-400" />}
+          </td>
           <td className="px-4 py-1.5 text-right tabular text-stone-700">{r.debit > 0 ? fmtMoney(r.debit) : <span className="text-stone-300">—</span>}</td>
           <td className="px-4 py-1.5 text-right tabular text-stone-700">{r.credit > 0 ? fmtMoney(r.credit) : <span className="text-stone-300">—</span>}</td>
           <td className="px-4 py-1.5 text-right tabular font-semibold text-stone-900">{fmtMoney(r.balance)}</td>
@@ -9969,6 +10258,7 @@ function BalanceSheetPane({ ctx }) {
 
   const [asOf, setAsOf] = useState(iso(TODAY));
   const [propId, setPropId] = useState(perms.properties === "all" ? "all" : activeProperty);
+  const [drillAccount, setDrillAccount] = useState(null);
 
   const bs = useMemo(() => _balanceSheet(ledger, asOf, propId === "all" ? null : propId, chart), [ledger, asOf, propId, chart]);
 
@@ -10028,6 +10318,15 @@ function BalanceSheetPane({ ctx }) {
         </div>
       </div>
 
+      <AccountActivityModal
+        open={!!drillAccount}
+        onClose={() => setDrillAccount(null)}
+        account={drillAccount}
+        ledger={ledger}
+        propertyId={propId}
+        range={{ start: iso(addDays(new Date(asOf), -180)), end: asOf }}
+      />
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* ASSETS */}
         <Card className="overflow-hidden">
@@ -10037,7 +10336,7 @@ function BalanceSheetPane({ ctx }) {
           <table className="w-full text-sm">
             <tbody className="divide-y divide-stone-100">
               {bs.assets.bySubtype.map(g => (
-                <BsGroup key={g.subtype} g={g} />
+                <BsGroup key={g.subtype} g={g} onDrill={setDrillAccount} />
               ))}
               <tr className="bg-stone-900 text-white">
                 <td className="px-4 py-2.5 font-semibold">Total Assets</td>
@@ -10058,7 +10357,7 @@ function BalanceSheetPane({ ctx }) {
                 <td colSpan={2} className="px-4 py-1.5 text-[10px] uppercase tracking-widest text-stone-600 font-bold">Liabilities</td>
               </tr>
               {bs.liabilities.bySubtype.map(g => (
-                <BsGroup key={g.subtype} g={g} />
+                <BsGroup key={g.subtype} g={g} onDrill={setDrillAccount} />
               ))}
               <tr className="bg-stone-50">
                 <td className="px-4 py-2 text-right text-xs font-semibold text-stone-600 uppercase tracking-wider">Total Liabilities</td>
@@ -10069,10 +10368,11 @@ function BalanceSheetPane({ ctx }) {
                 <td colSpan={2} className="px-4 py-1.5 text-[10px] uppercase tracking-widest text-stone-600 font-bold">Equity</td>
               </tr>
               {bs.equity.rows.map(r => (
-                <tr key={r.account.code} className="hover:bg-amber-50/40">
+                <tr key={r.account.code} className="hover:bg-amber-50/40 cursor-pointer" onClick={() => setDrillAccount(r.account)}>
                   <td className="px-4 py-1.5 text-stone-900 pl-8">
                     <span className="font-mono text-xs text-stone-500 mr-2">{r.account.code}</span>
                     {r.account.name}
+                    <ChevronRight size={12} className="inline ml-1 text-stone-400" />
                   </td>
                   <td className="px-4 py-1.5 text-right tabular">{fmtMoney(r.balance)}</td>
                 </tr>
@@ -10112,17 +10412,18 @@ function BalanceSheetPane({ ctx }) {
   );
 }
 
-function BsGroup({ g }) {
+function BsGroup({ g, onDrill }) {
   return (
     <>
       <tr className="bg-stone-50">
         <td colSpan={2} className="px-4 py-1.5 text-[10px] uppercase tracking-wider text-stone-500 font-bold">{g.label}</td>
       </tr>
       {g.rows.filter(r => r.hasActivity || Math.abs(r.balance) > 0.005).map(r => (
-        <tr key={r.account.code} className="hover:bg-amber-50/40">
+        <tr key={r.account.code} className={`hover:bg-amber-50/40 ${onDrill ? "cursor-pointer" : ""}`} onClick={() => onDrill?.(r.account)}>
           <td className="px-4 py-1.5 text-stone-900 pl-8">
             <span className="font-mono text-xs text-stone-500 mr-2">{r.account.code}</span>
             {r.account.name}
+            {onDrill && <ChevronRight size={12} className="inline ml-1 text-stone-400" />}
           </td>
           <td className="px-4 py-1.5 text-right tabular">{fmtMoney(r.balance)}</td>
         </tr>
