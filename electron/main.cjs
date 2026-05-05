@@ -25,6 +25,12 @@ function createMainWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      // Electron treats every file:// path as its own opaque origin under
+      // default webSecurity. The packaged renderer is fully bundled local
+      // code (no remote script loads), so disabling same-origin enforcement
+      // here is safe and unblocks asset/module loading from the asar.
+      webSecurity: false,
+      allowRunningInsecureContent: true,
     },
   });
 
@@ -41,7 +47,21 @@ function createMainWindow() {
     mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html")).catch((err) => {
       console.error("Failed to load production bundle:", err);
     });
+    // Open DevTools in packaged builds while we stabilize the renderer.
+    // Roll back when the app boots cleanly on first launch in the field.
+    mainWindow.webContents.openDevTools({ mode: "detach" });
   }
+
+  // Surface renderer load failures (script 404s, syntax errors at parse time)
+  // so a blank screen never goes unexplained.
+  mainWindow.webContents.on("did-fail-load", (_e, code, desc, url) => {
+    console.error(`[did-fail-load] ${code} ${desc} → ${url}`);
+    dialog.showErrorBox("Renderer failed to load", `${code} ${desc}\n\n${url}`);
+  });
+  mainWindow.webContents.on("render-process-gone", (_e, details) => {
+    console.error("[render-process-gone]", details);
+    dialog.showErrorBox("Renderer crashed", JSON.stringify(details, null, 2));
+  });
 
   mainWindow.once("ready-to-show", () => {
     mainWindow.show();

@@ -13,6 +13,28 @@
   </head>
   <body class="font-body bg-stone-50">
     <div id="root"></div>
+    <script>
+      // Last-resort error overlay — paints any uncaught error/rejection
+      // directly into the DOM so a blank renderer is never silent.
+      (function () {
+        function paint(title, detail) {
+          var el = document.getElementById("root") || document.body;
+          el.innerHTML =
+            '<div style="font:14px/1.5 system-ui,sans-serif;color:#fff;background:#7f1d1d;padding:24px;height:100vh;overflow:auto;white-space:pre-wrap;">' +
+            '<div style="font-size:18px;font-weight:600;margin-bottom:12px;">HotelOps · startup error</div>' +
+            '<div style="font-weight:600;margin-bottom:8px;">' + title + '</div>' +
+            '<div style="font-family:ui-monospace,Consolas,monospace;font-size:12px;background:#450a0a;padding:12px;border-radius:6px;">' +
+            (detail || '') + '</div></div>';
+        }
+        window.addEventListener("error", function (e) {
+          paint(e.message || "Uncaught error", (e.error && e.error.stack) || (e.filename + ":" + e.lineno));
+        });
+        window.addEventListener("unhandledrejection", function (e) {
+          var r = e.reason;
+          paint("Unhandled promise rejection", (r && r.stack) || String(r));
+        });
+      })();
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
