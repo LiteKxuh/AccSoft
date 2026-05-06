@@ -26,5 +26,21 @@ export default defineConfig({
     outDir: "dist",
     sourcemap: false,
     emptyOutDir: true,
+    chunkSizeWarningLimit: 1500,
+    rollupOptions: {
+      output: {
+        manualChunks: (id) => {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("recharts") || id.includes("d3-")) return "charts";
+          if (id.includes("xlsx")) return "xlsx";
+          if (id.includes("jspdf") || id.includes("html2canvas") || id.includes("dompurify") || id.includes("purify")) return "pdf";
+          if (id.includes("lucide-react")) return "icons";
+          // Bundle React + everything else with the main app to avoid circular
+          // chunk warnings from vite — manual chunking can deadlock when small
+          // common deps cycle between split groups.
+          return undefined;
+        },
+      },
+    },
   },
 });

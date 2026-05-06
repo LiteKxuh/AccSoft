@@ -37,5 +37,14 @@
       })();
     </script>
     <script type="module" src="/src/main.jsx"></script>
+    <script>
+      // Register the service worker only in real PWA contexts. Electron uses
+      // file:// where SWs aren't supported and would just throw.
+      if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+        window.addEventListener("load", function () {
+          navigator.serviceWorker.register("./sw.js").catch(function () {});
+        });
+      }
+    </script>
   </body>
 </html>

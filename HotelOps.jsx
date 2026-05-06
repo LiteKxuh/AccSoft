@@ -58,6 +58,50 @@ import {
   classifyDepartment as _classifyDepartment,
   groupByDepartment as _groupByDepartment,
 } from "./src/lib/scheduleExport.js";
+import {
+  laborKPIs as _laborKPIs,
+  productivityByDept as _productivityByDept,
+  scheduleVsActual as _scheduleVsActual,
+} from "./src/lib/labor.js";
+import {
+  consolidate as _consolidate,
+  portfolioKPIs as _portfolioKPIs,
+} from "./src/lib/portfolio.js";
+import {
+  logEvent as _logEvent,
+  readEvents as _readEvents,
+  detectStateChanges as _detectStateChanges,
+  diffSummary as _diffSummary,
+  clearLog as _clearAuditLog,
+} from "./src/lib/auditLog.js";
+import {
+  ocrInvoice as _ocrInvoice,
+  generateNACHA as _generateNACHA,
+  buildCheckRun as _buildCheckRun,
+  amountInWords as _amountInWords,
+} from "./src/lib/apAutomation.js";
+import {
+  remember as _vendorRemember,
+  suggestForInvoice as _vendorSuggest,
+} from "./src/lib/vendorMemory.js";
+import {
+  parseBankCSV as _parseBankCSV,
+  matchTransactions as _matchBankTxns,
+  isConfigured as _bankFeedConfigured,
+  setupHint as _bankFeedHint,
+  listLinks as _bankListLinks,
+  listTxns as _bankListTxns,
+} from "./src/lib/bankFeeds.js";
+import {
+  listProviders as _posListProviders,
+  activeProvider as _posActiveProvider,
+  setActiveProvider as _posSetActiveProvider,
+  isConfigured as _posIsConfigured,
+} from "./src/lib/posAdapters.js";
+import {
+  generateEFW2 as _generateEFW2,
+  generate1099NECFire as _generate1099Fire,
+} from "./src/lib/efile.js";
 
 /* =========================================================================
    FONTS + GLOBAL STYLE
@@ -548,8 +592,13 @@ export default function HotelOps() {
   // State mutators — wraps setState with auto-persistence of journal entries
   // for every report / invoice / payroll run / contractor payment that's added
   // or modified. JEs are immutable once posted (subject to period-close rules).
+  // Also emits audit-log events for any collection-level changes.
   const update = (partial) => setState((s) => {
     const merged = { ...s, ...partial };
+    try {
+      const events = _detectStateChanges({ before: s, after: merged, user: currentUser });
+      events.forEach(e => _logEvent(e));
+    } catch {}
     // Build a fast lookup of every JE we already have, keyed by source+sourceId
     const seen = new Set();
     (merged.journalEntries || []).forEach((j) => {
@@ -4805,6 +4854,7 @@ function AccountingModule({ ctx }) {
             { id: "ap", label: "A/P", icon: Receipt },
             { id: "tax", label: "Tax Calendar", icon: Calendar },
             { id: "yearend", label: "W-2 / 1099", icon: FileCheck2 },
+            { id: "labor", label: "Labor Cost", icon: Clock, badge: "HR" },
             { id: "compset", label: "Compset", icon: TrendingUp },
             { id: "portfolio", label: "Portfolio", icon: Building2 },
             { id: "trends", label: "Trends", icon: TrendingUp },
@@ -4845,6 +4895,7 @@ function AccountingModule({ ctx }) {
       {tab === "ar" && <ArAgingPane ctx={ctx} />}
       {tab === "tax" && <TaxCalendarPane ctx={ctx} />}
       {tab === "yearend" && <YearEndFormsPane ctx={ctx} />}
+      {tab === "labor" && <LaborAnalyticsPane ctx={ctx} />}
       {tab === "compset" && <CompsetPane ctx={ctx} />}
       {tab === "portfolio" && <PortfolioPane ctx={ctx} setTab={setTab} />}
       {tab === "trends" && <TrendsPane ctx={ctx} />}
@@ -7369,6 +7420,96 @@ function computeW2Summary(employee, runs, year) {
   };
 }
 
+// Build an SSA EFW2 (W-2) or IRS FIRE (1099-NEC) file from current data and
+// trigger a browser download. Uses the active property as employer; user is
+// prompted for missing TIN/EIN. The file is *generated*, not transmitted —
+// the user uploads it to the SSA BSO portal or the IRS FIRE system.
+function generateEFile(ctx, formType, year) {
+  const { state, currentUser, activeProperty, toast } = ctx;
+  const property = state.properties.find(p => p.id === activeProperty) || state.properties[0];
+  if (!property) { toast?.push("No active property", { tone: "error" }); return; }
+
+  const ein = property.ein || prompt(`Enter EIN for ${property.name} (e.g. 12-3456789):`);
+  if (!ein || !/\d{2}-?\d{7}/.test(ein)) { toast?.push("Valid EIN required to generate the file", { tone: "error" }); return; }
+
+  const submitter = {
+    ein,
+    name: property.name,
+    address: property.location || "",
+    city: (property.location || "").split(",")[0] || "",
+    state: ((property.location || "").split(",")[1] || "").trim().slice(0, 2),
+    zip: property.zip || "",
+  };
+  const employer = { ...submitter, kindOfEmployer: "R" };
+
+  try {
+    if (formType === "w2") {
+      const w2s = state.employees
+        .filter(e => e.status === "active" || e.status === "terminated")
+        .map(e => {
+          const s = computeW2Summary(e, state.payrollRuns, year);
+          return {
+            ssn: e.ssn || "",
+            firstName: (e.firstName || "").toUpperCase(),
+            lastName: (e.lastName || "").toUpperCase(),
+            address: e.address || "",
+            city: e.city || "",
+            state: e.state || "",
+            zip: e.zip || "",
+            wages: s.grossWages,
+            federalIncomeTaxWithheld: s.fedWithheld,
+            socialSecurityWages: s.ssWages,
+            socialSecurityTax: s.ssTax,
+            medicareWages: s.medicareWages,
+            medicareTax: s.medicareTax,
+          };
+        })
+        .filter(w => w.ssn && w.wages > 0);
+      if (w2s.length === 0) { toast?.push("No employees with wages > $0 for this year", { tone: "error" }); return; }
+      const out = _generateEFW2({ submitter, employer, w2s, taxYear: year });
+      downloadText(out.content, out.filename);
+      toast?.push(`Generated ${out.filename} — ${w2s.length} W-2s, ${fmtMoney(out.summary.wages)} total wages`, { tone: "success", duration: 6000 });
+    } else {
+      const transmitter = { ...submitter, tin: ein, tcc: prompt("Enter your IRS Transmitter Control Code (TCC) — apply at FIRE.IRS.gov if you don't have one:") || "" };
+      if (!transmitter.tcc) { toast?.push("TCC required for FIRE submission", { tone: "error" }); return; }
+      const payer = { ...submitter, tin: ein };
+      const payees = state.contractors
+        .map(c => {
+          const ytd = state.contractorPayments
+            .filter(p => p.contractorId === c.id && new Date(p.date).getFullYear() === year)
+            .reduce((s, p) => s + (p.amount || 0), 0);
+          if (ytd < 600) return null;
+          return {
+            tin: c.tin || "",
+            name: (c.name || "").toUpperCase(),
+            address: c.address || "",
+            city: c.city || "",
+            state: c.state || "",
+            zip: c.zip || "",
+            nonemployeeCompensation: ytd,
+          };
+        })
+        .filter(p => p && p.tin);
+      if (payees.length === 0) { toast?.push("No contractors with TIN + ≥$600 paid this year", { tone: "error" }); return; }
+      const out = _generate1099Fire({ transmitter, payer, payees, taxYear: year });
+      downloadText(out.content, out.filename);
+      toast?.push(`Generated ${out.filename} — ${payees.length} 1099-NECs, ${fmtMoney(out.summary.total)} total`, { tone: "success", duration: 6000 });
+    }
+  } catch (err) {
+    toast?.push(`E-file generation failed: ${err.message}`, { tone: "error" });
+  }
+}
+
+function downloadText(content, filename) {
+  const blob = new Blob([content], { type: "text/plain;charset=us-ascii" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function YearEndFormsPane({ ctx }) {
   const { state, update, perms, currentUser, toast } = ctx;
   const [formType, setFormType] = useState("w2"); // w2 | 1099
@@ -7475,6 +7616,10 @@ function YearEndFormsPane({ ctx }) {
             columns={formType === "w2" ? w2Cols : c1099Cols}
             rows={formType === "w2" ? w2ExportRows : c1099ExportRows}
           />
+          <Button variant="primary" onClick={() => generateEFile(ctx, formType, year)}>
+            <Download size={14} />
+            E-File ({formType === "w2" ? "EFW2" : "FIRE"})
+          </Button>
         </div>
       </div>
 
@@ -12368,6 +12513,7 @@ function SettingsModule({ ctx }) {
           { id: "integrations", label: "Integrations", icon: Hash },
           { id: "notifications", label: "Notifications", icon: Mail },
           { id: "activity", label: "Activity Log", icon: ClipboardList },
+          { id: "audit", label: "Audit Log", icon: Shield },
           { id: "system", label: "System", icon: SettingsIcon },
         ].map(t => (
           <button
@@ -12504,9 +12650,16 @@ function SettingsModule({ ctx }) {
         </div>
       )}
 
-      {tab === "integrations" && <IntegrationsTab ctx={ctx} />}
+      {tab === "integrations" && (
+        <div className="space-y-5">
+          <IntegrationsTab ctx={ctx} />
+          <BankFeedCard ctx={ctx} />
+          <PosIntegrationCard ctx={ctx} />
+        </div>
+      )}
       {tab === "notifications" && <NotificationsTab ctx={ctx} />}
       {tab === "activity" && <ActivityLogTab ctx={ctx} />}
+      {tab === "audit" && <AuditLogPane ctx={ctx} />}
       {tab === "system" && (
         <div className="space-y-5">
           <ApiKeyCard />
@@ -12618,6 +12771,431 @@ function PropertyEditModal({ property, isNew, onClose, onSave, onDelete, canDele
         </div>
       </div>
     </Modal>
+  );
+}
+
+/* =========================================================================
+   LABOR ANALYTICS PANE — CPOR, productivity, schedule vs actual
+   ========================================================================= */
+function LaborAnalyticsPane({ ctx }) {
+  const { state, perms, activeProperty, accessibleProperties } = ctx;
+  const propsAll = perms.properties === "all" ? accessibleProperties : accessibleProperties.filter(p => p.id === activeProperty);
+  const propIds = propsAll.map(p => p.id);
+
+  const [propFilter, setPropFilter] = useState("all"); // "all" | property id
+  const [period, setPeriod] = useState("last30"); // last7 | last30 | mtd | qtd | ytd
+
+  const { start, end } = useMemo(() => {
+    const today = new Date();
+    if (period === "last7") return { start: iso(addDays(today, -7)), end: iso(today) };
+    if (period === "last30") return { start: iso(addDays(today, -30)), end: iso(today) };
+    if (period === "mtd") return { start: iso(new Date(today.getFullYear(), today.getMonth(), 1)), end: iso(today) };
+    if (period === "qtd") {
+      const q = Math.floor(today.getMonth() / 3) * 3;
+      return { start: iso(new Date(today.getFullYear(), q, 1)), end: iso(today) };
+    }
+    return { start: iso(new Date(today.getFullYear(), 0, 1)), end: iso(today) };
+  }, [period]);
+
+  const filterPropIds = propFilter === "all" ? propIds : [propFilter];
+
+  const filteredEmployees = state.employees.filter(e => e.status === "active" || filterPropIds.includes(e.propertyId));
+  const filteredShifts = (state.shifts || []).filter(s => {
+    const e = state.employees.find(x => x.id === s.employeeId);
+    return e && filterPropIds.includes(e.propertyId);
+  });
+  const filteredSchedule = (state.schedule || []).filter(s => {
+    const e = state.employees.find(x => x.id === s.employeeId);
+    return e && filterPropIds.includes(e.propertyId);
+  });
+  const filteredPayroll = (state.payrollRuns || []).filter(p => filterPropIds.includes(p.propertyId) || !p.propertyId);
+  const filteredReports = (state.reports || []).filter(r => filterPropIds.includes(r.propertyId));
+
+  const kpis = useMemo(() => _laborKPIs({
+    shifts: filteredShifts, schedule: filteredSchedule, payrollRuns: filteredPayroll,
+    employees: filteredEmployees, reports: filteredReports, start, end,
+  }), [filteredShifts, filteredSchedule, filteredPayroll, filteredEmployees, filteredReports, start, end]);
+
+  const productivity = useMemo(() => _productivityByDept({
+    shifts: filteredShifts, payrollRuns: filteredPayroll,
+    employees: filteredEmployees, reports: filteredReports, start, end,
+  }), [filteredShifts, filteredPayroll, filteredEmployees, filteredReports, start, end]);
+
+  const variance = useMemo(() => _scheduleVsActual({
+    shifts: filteredShifts, schedule: filteredSchedule,
+    employees: filteredEmployees, start, end,
+  }).slice(0, 20), [filteredShifts, filteredSchedule, filteredEmployees, start, end]);
+
+  return (
+    <div className="px-8 pt-4 pb-12 space-y-6">
+      <div className="flex items-end justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-widest text-amber-700 font-semibold mb-1">HR Analytics</div>
+          <h2 className="font-display text-3xl font-semibold text-stone-900">Labor Cost</h2>
+          <p className="text-stone-500 text-sm mt-1">Cost per occupied room, productivity by department, and schedule vs. actual hours.</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <select value={propFilter} onChange={e => setPropFilter(e.target.value)} className="px-3 py-2 rounded-md border border-stone-300 bg-white text-sm font-medium">
+            <option value="all">All properties</option>
+            {propsAll.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <select value={period} onChange={e => setPeriod(e.target.value)} className="px-3 py-2 rounded-md border border-stone-300 bg-white text-sm font-medium">
+            <option value="last7">Last 7 days</option>
+            <option value="last30">Last 30 days</option>
+            <option value="mtd">Month-to-date</option>
+            <option value="qtd">Quarter-to-date</option>
+            <option value="ytd">Year-to-date</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-4 gap-4">
+        <KpiCard label="CPOR" value={kpis.cpor != null ? fmtMoney(kpis.cpor) : "—"} sub={`${kpis.roomsSold} rooms sold`} />
+        <KpiCard label="Labor % revenue" value={kpis.laborPctRevenue != null ? `${(kpis.laborPctRevenue * 100).toFixed(1)}%` : "—"} sub={fmtMoneyShort(kpis.revenue)} />
+        <KpiCard label="Total labor" value={fmtMoney(kpis.laborCost)} sub={kpis.laborCostSource === "payroll" ? `${kpis.actualHours.toFixed(0)} hrs · payroll` : `${kpis.actualHours.toFixed(0)} hrs · est`} />
+        <KpiCard label="Hours overage" value={`${kpis.overage.toFixed(1)}h`} sub={`Sched ${kpis.scheduledHours.toFixed(0)}h · Actual ${kpis.actualHours.toFixed(0)}h`} />
+      </div>
+
+      <Card>
+        <div className="px-6 py-4 border-b border-stone-200">
+          <h3 className="font-display text-lg text-stone-900">Productivity by department</h3>
+          <p className="text-xs text-stone-500 mt-0.5">USALI-aligned departments. CPOR = department labor / rooms sold.</p>
+        </div>
+        <table className="w-full text-sm">
+          <thead className="bg-stone-50">
+            <tr className="text-xs uppercase tracking-wider text-stone-500">
+              <th className="text-left px-6 py-2">Department</th>
+              <th className="text-right px-6 py-2">Headcount</th>
+              <th className="text-right px-6 py-2">Hours</th>
+              <th className="text-right px-6 py-2">Cost</th>
+              <th className="text-right px-6 py-2">Avg rate</th>
+              <th className="text-right px-6 py-2">CPOR</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-stone-100">
+            {productivity.length === 0 && (
+              <tr><td colSpan="6" className="px-6 py-10 text-center text-stone-400">No labor activity in the selected period.</td></tr>
+            )}
+            {productivity.map(row => (
+              <tr key={row.dept}>
+                <td className="px-6 py-3 font-medium text-stone-800">{row.dept}</td>
+                <td className="px-6 py-3 text-right">{row.headcount}</td>
+                <td className="px-6 py-3 text-right number-display">{row.hours.toFixed(1)}</td>
+                <td className="px-6 py-3 text-right number-display">{fmtMoney(row.cost)}</td>
+                <td className="px-6 py-3 text-right number-display">{fmtMoney(row.avgRate)}/h</td>
+                <td className="px-6 py-3 text-right number-display">{row.cpor != null ? fmtMoney(row.cpor) : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+
+      <Card>
+        <div className="px-6 py-4 border-b border-stone-200">
+          <h3 className="font-display text-lg text-stone-900">Schedule vs. actual</h3>
+          <p className="text-xs text-stone-500 mt-0.5">Top 20 employees by absolute variance. Overruns in amber, underruns in sky.</p>
+        </div>
+        <table className="w-full text-sm">
+          <thead className="bg-stone-50">
+            <tr className="text-xs uppercase tracking-wider text-stone-500">
+              <th className="text-left px-6 py-2">Employee</th>
+              <th className="text-left px-6 py-2">Department</th>
+              <th className="text-right px-6 py-2">Scheduled</th>
+              <th className="text-right px-6 py-2">Actual</th>
+              <th className="text-right px-6 py-2">Variance</th>
+              <th className="text-right px-6 py-2">%</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-stone-100">
+            {variance.length === 0 && (
+              <tr><td colSpan="6" className="px-6 py-10 text-center text-stone-400">No shifts or scheduled hours in this period.</td></tr>
+            )}
+            {variance.map(v => (
+              <tr key={v.employeeId}>
+                <td className="px-6 py-3 font-medium text-stone-800">{v.name}</td>
+                <td className="px-6 py-3 text-stone-600">{v.dept}</td>
+                <td className="px-6 py-3 text-right number-display">{v.scheduled.toFixed(1)}</td>
+                <td className="px-6 py-3 text-right number-display">{v.actual.toFixed(1)}</td>
+                <td className={`px-6 py-3 text-right number-display font-medium ${v.variance > 0.5 ? "text-amber-700" : v.variance < -0.5 ? "text-sky-700" : "text-stone-500"}`}>
+                  {v.variance > 0 ? "+" : ""}{v.variance.toFixed(1)}h
+                </td>
+                <td className="px-6 py-3 text-right number-display text-stone-500">
+                  {v.variancePct != null ? `${(v.variancePct * 100).toFixed(0)}%` : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+}
+
+/* =========================================================================
+   AUDIT LOG PANE — append-only event history
+   ========================================================================= */
+function AuditLogPane({ ctx }) {
+  const { state, currentUser, toast } = ctx;
+  const [entityType, setEntityType] = useState("all");
+  const [actionFilter, setActionFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  const events = useMemo(() => {
+    const filt = {};
+    if (entityType !== "all") filt.entityType = entityType;
+    if (actionFilter !== "all") filt.action = actionFilter;
+    let list = _readEvents(filt);
+    if (search.trim()) {
+      const s = search.toLowerCase();
+      list = list.filter(e =>
+        (e.userName || "").toLowerCase().includes(s) ||
+        (e.entityId || "").toLowerCase().includes(s) ||
+        (e.action || "").toLowerCase().includes(s)
+      );
+    }
+    return list.slice(0, 500);
+  }, [entityType, actionFilter, search, refreshTick]);
+
+  const ENTITY_TYPES = ["all", "properties", "employees", "shifts", "schedule", "reports", "budgets", "vendors", "invoices", "payrollRuns", "contractors", "contractorPayments", "journalEntries", "closedPeriods", "bankRecs"];
+  const ACTIONS = ["all", "create", "update", "delete"];
+
+  const handleClear = () => {
+    if (!confirm("Clear the entire audit log? This cannot be undone.")) return;
+    _clearAuditLog();
+    setRefreshTick(t => t + 1);
+    toast?.push("Audit log cleared", { tone: "info" });
+  };
+
+  const handleExport = () => {
+    const blob = new Blob([JSON.stringify(events, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `hotelops-audit-log-${iso(TODAY)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="space-y-5">
+      <Card>
+        <div className="px-6 py-4 border-b border-stone-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-display text-lg text-stone-900">Audit Log</h3>
+              <p className="text-xs text-stone-500 mt-0.5">Append-only history of every record change. Required for SOX-style internal controls.</p>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" onClick={handleExport}><Download size={13} />Export JSON</Button>
+              {currentUser.role === "admin" && (
+                <Button variant="danger" size="sm" onClick={handleClear}><Trash2 size={13} />Clear</Button>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="p-4 flex items-center gap-3 border-b border-stone-100 bg-stone-50/50">
+          <select value={entityType} onChange={e => setEntityType(e.target.value)} className="px-3 py-2 rounded-md border border-stone-300 bg-white text-sm">
+            {ENTITY_TYPES.map(t => <option key={t} value={t}>{t === "all" ? "All entity types" : t}</option>)}
+          </select>
+          <select value={actionFilter} onChange={e => setActionFilter(e.target.value)} className="px-3 py-2 rounded-md border border-stone-300 bg-white text-sm">
+            {ACTIONS.map(a => <option key={a} value={a}>{a === "all" ? "All actions" : a}</option>)}
+          </select>
+          <div className="flex-1 relative">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search by user, entity ID, or action…"
+              className="w-full pl-8 pr-3 py-2 rounded-md border border-stone-300 bg-white text-sm"
+            />
+          </div>
+          <span className="text-xs text-stone-500">{events.length} events</span>
+        </div>
+        <div className="max-h-[600px] overflow-y-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-white sticky top-0 border-b border-stone-200">
+              <tr className="text-xs uppercase tracking-wider text-stone-500">
+                <th className="text-left px-6 py-2 font-semibold">When</th>
+                <th className="text-left px-6 py-2 font-semibold">User</th>
+                <th className="text-left px-6 py-2 font-semibold">Action</th>
+                <th className="text-left px-6 py-2 font-semibold">Entity</th>
+                <th className="text-left px-6 py-2 font-semibold">Changes</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {events.length === 0 && (
+                <tr><td colSpan="5" className="px-6 py-12 text-center text-stone-400">No events match your filters.</td></tr>
+              )}
+              {events.map(e => {
+                const summary = e.before && e.after ? _diffSummary(e.before, e.after).summary : (e.before ? "(deleted)" : "(created)");
+                const tone = e.action === "create" ? "emerald" : e.action === "delete" ? "rose" : "sky";
+                return (
+                  <tr key={e.id} className="hover:bg-stone-50">
+                    <td className="px-6 py-2 text-xs text-stone-500 whitespace-nowrap">{new Date(e.ts).toLocaleString()}</td>
+                    <td className="px-6 py-2 text-stone-700">{e.userName}</td>
+                    <td className="px-6 py-2"><Badge color={tone}>{e.action}</Badge></td>
+                    <td className="px-6 py-2 text-stone-700"><code className="text-xs bg-stone-100 px-1.5 py-0.5 rounded">{e.entityType}/{e.entityId?.slice(0, 12) || "—"}</code></td>
+                    <td className="px-6 py-2 text-xs text-stone-500 max-w-md truncate" title={summary}>{summary}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+/* =========================================================================
+   BANK FEED CARD — Plaid scaffolding (inert until configured)
+   ========================================================================= */
+function BankFeedCard({ ctx }) {
+  const { toast } = ctx;
+  const [proxyUrl, setProxyUrl] = useState(() => { try { return localStorage.getItem("hotelops:bankProxyUrl") || ""; } catch { return ""; } });
+  const [proxyAuth, setProxyAuth] = useState(() => { try { return localStorage.getItem("hotelops:bankProxyAuth") || ""; } catch { return ""; } });
+  const [links, setLinks] = useState(() => _bankListLinks());
+
+  const save = () => {
+    try {
+      if (proxyUrl.trim()) localStorage.setItem("hotelops:bankProxyUrl", proxyUrl.trim());
+      else localStorage.removeItem("hotelops:bankProxyUrl");
+      if (proxyAuth.trim()) localStorage.setItem("hotelops:bankProxyAuth", proxyAuth.trim());
+      else localStorage.removeItem("hotelops:bankProxyAuth");
+      toast?.push("Bank feed settings saved", { tone: "success" });
+    } catch {}
+  };
+
+  const configured = !!proxyUrl.trim();
+
+  return (
+    <Card>
+      <div className="px-6 py-4 border-b border-stone-200 flex items-center justify-between">
+        <div>
+          <h3 className="font-display text-lg text-stone-900">Bank Feeds (Plaid)</h3>
+          <p className="text-xs text-stone-500 mt-0.5">Auto-pull bank transactions for one-click reconciliation. Requires a server-side Plaid worker.</p>
+        </div>
+        {configured ? <Badge color="emerald">Configured</Badge> : <Badge color="stone">Inert</Badge>}
+      </div>
+      <div className="p-6 space-y-4">
+        {!configured && (
+          <div className="text-sm bg-stone-50 border border-stone-200 rounded-md p-4">
+            <strong className="text-stone-900">Not yet connected.</strong>{" "}
+            <span className="text-stone-600">
+              You can still use Bank Rec by uploading a CSV from your bank. To enable auto-feeds, deploy a Plaid proxy worker (similar to <code className="font-mono bg-white px-1 rounded border border-stone-200">worker/anthropic-proxy.js</code>) and paste its URL below.
+            </span>
+          </div>
+        )}
+        <label className="block">
+          <span className="block text-[10px] uppercase tracking-wider text-stone-500 mb-1 font-medium">Bank Proxy URL</span>
+          <input
+            type="text"
+            value={proxyUrl}
+            onChange={e => setProxyUrl(e.target.value)}
+            placeholder="https://bankfeed.your-worker.workers.dev"
+            className="w-full px-3 py-2 text-sm font-mono border border-stone-300 rounded-md bg-white focus:border-amber-700 focus:outline-none"
+          />
+        </label>
+        <label className="block">
+          <span className="block text-[10px] uppercase tracking-wider text-stone-500 mb-1 font-medium">Shared Secret <span className="text-stone-400 font-normal lowercase tracking-normal">— optional</span></span>
+          <input
+            type="password"
+            value={proxyAuth}
+            onChange={e => setProxyAuth(e.target.value)}
+            placeholder="X-HotelOps-Auth"
+            className="w-full px-3 py-2 text-sm font-mono border border-stone-300 rounded-md bg-white focus:border-amber-700 focus:outline-none"
+          />
+        </label>
+        {links.length > 0 && (
+          <div>
+            <div className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-2">Linked institutions</div>
+            <div className="space-y-1">
+              {links.map(l => (
+                <div key={l.id} className="flex items-center gap-3 px-3 py-2 rounded-md bg-stone-50 border border-stone-200 text-sm">
+                  <Building2 size={14} className="text-stone-500" />
+                  <span className="font-medium">{l.institution}</span>
+                  <span className="text-stone-500 text-xs">{l.accounts?.length || 0} accounts</span>
+                  <span className="ml-auto text-xs text-stone-400">{l.lastSync ? `Synced ${new Date(l.lastSync).toLocaleString()}` : "Not synced"}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="flex justify-end">
+          <Button variant="primary" onClick={save}><Save size={14} />Save</Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/* =========================================================================
+   POS INTEGRATION CARD — Toast / Square / Aloha scaffolding
+   ========================================================================= */
+function PosIntegrationCard({ ctx }) {
+  const { toast } = ctx;
+  const [provider, setProvider] = useState(() => { try { return localStorage.getItem("hotelops:posProvider") || ""; } catch { return ""; } });
+  const [proxyUrl, setProxyUrl] = useState(() => { try { return localStorage.getItem("hotelops:posProxyUrl") || ""; } catch { return ""; } });
+  const [proxyAuth, setProxyAuth] = useState(() => { try { return localStorage.getItem("hotelops:posProxyAuth") || ""; } catch { return ""; } });
+  const providers = _posListProviders();
+
+  const save = () => {
+    try {
+      if (provider) localStorage.setItem("hotelops:posProvider", provider);
+      else localStorage.removeItem("hotelops:posProvider");
+      if (proxyUrl.trim()) localStorage.setItem("hotelops:posProxyUrl", proxyUrl.trim());
+      else localStorage.removeItem("hotelops:posProxyUrl");
+      if (proxyAuth.trim()) localStorage.setItem("hotelops:posProxyAuth", proxyAuth.trim());
+      else localStorage.removeItem("hotelops:posProxyAuth");
+      toast?.push("POS integration saved", { tone: "success" });
+    } catch {}
+  };
+
+  const configured = !!(provider && proxyUrl.trim());
+
+  return (
+    <Card>
+      <div className="px-6 py-4 border-b border-stone-200 flex items-center justify-between">
+        <div>
+          <h3 className="font-display text-lg text-stone-900">POS Integration</h3>
+          <p className="text-xs text-stone-500 mt-0.5">Auto-pull daily F&amp;B sales from your POS into the Daily Flash.</p>
+        </div>
+        {configured ? <Badge color="emerald">Configured</Badge> : <Badge color="stone">Inert</Badge>}
+      </div>
+      <div className="p-6 space-y-4">
+        <label className="block">
+          <span className="block text-[10px] uppercase tracking-wider text-stone-500 mb-1 font-medium">Provider</span>
+          <select value={provider} onChange={e => setProvider(e.target.value)} className="w-full px-3 py-2 text-sm border border-stone-300 rounded-md bg-white">
+            <option value="">— Select —</option>
+            {providers.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </select>
+        </label>
+        <label className="block">
+          <span className="block text-[10px] uppercase tracking-wider text-stone-500 mb-1 font-medium">POS Proxy URL</span>
+          <input
+            type="text"
+            value={proxyUrl}
+            onChange={e => setProxyUrl(e.target.value)}
+            placeholder="https://pos.your-worker.workers.dev"
+            className="w-full px-3 py-2 text-sm font-mono border border-stone-300 rounded-md bg-white focus:border-amber-700 focus:outline-none"
+          />
+        </label>
+        <label className="block">
+          <span className="block text-[10px] uppercase tracking-wider text-stone-500 mb-1 font-medium">Shared Secret <span className="text-stone-400 font-normal lowercase tracking-normal">— optional</span></span>
+          <input
+            type="password"
+            value={proxyAuth}
+            onChange={e => setProxyAuth(e.target.value)}
+            placeholder="X-HotelOps-Auth"
+            className="w-full px-3 py-2 text-sm font-mono border border-stone-300 rounded-md bg-white focus:border-amber-700 focus:outline-none"
+          />
+        </label>
+        <div className="flex justify-end">
+          <Button variant="primary" onClick={save}><Save size={14} />Save</Button>
+        </div>
+      </div>
+    </Card>
   );
 }
 
