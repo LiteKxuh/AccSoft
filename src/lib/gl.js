@@ -357,17 +357,62 @@ export function apAccount(chart) {
 
 /* ---------- Journal validation ---------- */
 
-export function isBalanced(entry) {
-  if (!entry?.lines?.length) return false;
-  const debit = entry.lines.reduce((s, l) => s + (Number(l.debit) || 0), 0);
-  const credit = entry.lines.reduce((s, l) => s + (Number(l.credit) || 0), 0);
-  return Math.abs(debit - credit) < 0.005 && debit > 0;
+import { toCents, fromCents } from "./money.js";
+
+// Use integer-cent arithmetic so cumulative rounding never silently breaks balance.
+export function entryTotals(entry) {
+  let debitCents = 0, creditCents = 0;
+  for (const l of (entry?.lines || [])) {
+    debitCents += toCents(l.debit);
+    creditCents += toCents(l.credit);
+  }
+  return {
+    debit: fromCents(debitCents),
+    credit: fromCents(creditCents),
+    balanced: debitCents === creditCents && debitCents > 0,
+  };
 }
 
-export function entryTotals(entry) {
-  const debit = (entry?.lines || []).reduce((s, l) => s + (Number(l.debit) || 0), 0);
-  const credit = (entry?.lines || []).reduce((s, l) => s + (Number(l.credit) || 0), 0);
-  return { debit, credit, balanced: Math.abs(debit - credit) < 0.005 };
+export function isBalanced(entry) {
+  if (!entry?.lines?.length) return false;
+  return entryTotals(entry).balanced;
+}
+
+/**
+ * Strict-validation gate. Throws a structured error rather than silently
+ * letting an unbalanced JE land on the books.
+ *
+ *   try { assertPostable(entry, { closedPeriods, chart }) }
+ *   catch (e) { e.code === "JE_UNBALANCED" | "JE_PERIOD_LOCKED" | "JE_NO_LINES" | "JE_BAD_ACCOUNT" }
+ */
+export function assertPostable(entry, { closedPeriods = [], chart = DEFAULT_CHART } = {}) {
+  if (!entry || !Array.isArray(entry.lines) || entry.lines.length === 0) {
+    throw makeErr("JE_NO_LINES", "Journal entry has no lines.");
+  }
+  const t = entryTotals(entry);
+  if (!t.balanced) {
+    throw makeErr("JE_UNBALANCED", `Journal entry is not balanced: debits ${t.debit.toFixed(2)} vs credits ${t.credit.toFixed(2)}.`, { debit: t.debit, credit: t.credit, diff: t.debit - t.credit });
+  }
+  for (const l of entry.lines) {
+    const acct = findAccount(chart, l.accountCode);
+    if (!acct) {
+      throw makeErr("JE_BAD_ACCOUNT", `Account ${l.accountCode} is not in the chart of accounts.`, { accountCode: l.accountCode });
+    }
+    if (toCents(l.debit) > 0 && toCents(l.credit) > 0) {
+      throw makeErr("JE_MIXED_LINE", `Line ${l.accountCode} has both debit and credit — split into two lines.`, { line: l });
+    }
+  }
+  if (isJournalLocked(entry, closedPeriods)) {
+    throw makeErr("JE_PERIOD_LOCKED", `Cannot post to ${String(entry.date).slice(0, 7)} — that period is closed.`, { date: entry.date, propertyId: entry.propertyId });
+  }
+  return true;
+}
+
+function makeErr(code, message, detail) {
+  const e = new Error(message);
+  e.code = code;
+  e.detail = detail;
+  return e;
 }
 
 /* ---------- Auto-derive journals from existing data ---------- */
@@ -696,11 +741,22 @@ export function trialBalance(ledger, asOf, propertyId, chart = DEFAULT_CHART) {
       hasActivity: cur.debit > 0 || cur.credit > 0,
     };
   });
-  const totalDr = rows.reduce((s, r) => s + r.debit, 0);
-  const totalCr = rows.reduce((s, r) => s + r.credit, 0);
+  // Aggregate in cents to avoid float drift on large ledgers
+  let totalDrCents = 0, totalCrCents = 0;
+  for (const r of rows) {
+    totalDrCents += toCents(r.debit);
+    totalCrCents += toCents(r.credit);
+  }
+  const totalDr = fromCents(totalDrCents);
+  const totalCr = fromCents(totalCrCents);
   return {
     rows,
-    totals: { debit: totalDr, credit: totalCr, diff: totalDr - totalCr, balanced: Math.abs(totalDr - totalCr) < 0.01 },
+    totals: {
+      debit: totalDr,
+      credit: totalCr,
+      diff: fromCents(totalDrCents - totalCrCents),
+      balanced: totalDrCents === totalCrCents,
+    },
   };
 }
 

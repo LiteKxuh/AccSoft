@@ -98,6 +98,10 @@ import {
   setActiveProvider as _posSetActiveProvider,
   isConfigured as _posIsConfigured,
 } from "./src/lib/posAdapters.js";
+import { AiInsightsCard as _AiInsightsCard } from "./src/lib/AiInsights.jsx";
+import { apAging as _apAging, arAging as _arAging } from "./src/lib/aging.js";
+import { buildFlash as _buildFlash, buildForecastVariance as _buildForecastVariance } from "./src/lib/flashReport.js";
+import { listViews as _listViews, saveView as _saveView, deleteView as _deleteView, touchView as _touchView } from "./src/lib/savedViews.js";
 import {
   generateEFW2 as _generateEFW2,
   generate1099NECFire as _generate1099Fire,
@@ -5069,6 +5073,10 @@ function FlashReportPane({ ctx, setTab }) {
         </div>
       )}
 
+      {/* Ops Intelligence — deterministic anomaly detection + optional AI narrative */}
+      <_AiInsightsCard report={focusReport} reports={state.reports} propertyName={property?.name} />
+
+
       {/* Revenue composition */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <DepartmentTile
@@ -8179,6 +8187,10 @@ function ApPane({ ctx }) {
       pushActivity(ctx, "invoice.create", { invoiceId: newInv.id, amount: newInv.amount });
       toast?.push("Invoice posted", { tone: "success" });
     }
+    // Learn vendor → GL coding for future auto-suggestions
+    if (draft.vendorId && draft.glAccount) {
+      try { _vendorRemember({ vendorId: draft.vendorId, accountCode: draft.glAccount }); } catch {}
+    }
     setShowInvoiceModal(false);
     setEditingInvoice(null);
   };
@@ -8443,7 +8455,7 @@ function ApPane({ ctx }) {
 }
 
 function InvoiceModal({ invoice, ctx, onSave, onClose }) {
-  const { state, accessibleProperties, currentUser } = ctx;
+  const { state, accessibleProperties, currentUser, toast } = ctx;
   const today = iso(TODAY);
   const [draft, setDraft] = useState(invoice || {
     vendorId: state.vendors[0]?.id || "",
@@ -8459,11 +8471,106 @@ function InvoiceModal({ invoice, ctx, onSave, onClose }) {
     attachments: [],
   });
   const handle = (k, v) => setDraft(d => ({ ...d, [k]: v }));
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const [ocrError, setOcrError] = useState(null);
+  const [glSuggestion, setGlSuggestion] = useState(null);
+  const fileRef = useRef(null);
+
+  // When vendor changes, refresh GL suggestion from vendor memory
+  useEffect(() => {
+    if (!draft.vendorId) { setGlSuggestion(null); return; }
+    const v = state.vendors.find(x => x.id === draft.vendorId);
+    const s = _vendorSuggest({ vendorId: draft.vendorId, vendorName: v?.name });
+    setGlSuggestion(s);
+  }, [draft.vendorId, state.vendors]);
+
+  const matchVendorByName = (name) => {
+    if (!name) return null;
+    const norm = String(name).toLowerCase().replace(/[\s.,&'-]+/g, "");
+    return state.vendors.find(v => String(v.name).toLowerCase().replace(/[\s.,&'-]+/g, "") === norm)
+      || state.vendors.find(v => String(v.name).toLowerCase().includes(norm.slice(0, Math.max(6, norm.length - 2))))
+      || null;
+  };
+
+  const onUploadOcr = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setOcrError(null);
+    setOcrBusy(true);
+    try {
+      const base64 = await _fileToBase64(file);
+      const result = await _ocrInvoice({ base64, mediaType: file.type || "application/pdf" });
+      if (!result) {
+        setOcrError("OCR not configured. Set the Anthropic proxy URL or API key in Settings → System.");
+        toast?.push?.("OCR not configured — fill the invoice manually.", { tone: "warn" });
+        return;
+      }
+      const patch = {};
+      if (result.invoiceNumber) patch.number = String(result.invoiceNumber);
+      if (result.issuedDate)    patch.issuedDate = result.issuedDate;
+      if (result.dueDate)       patch.dueDate = result.dueDate;
+      if (Number.isFinite(Number(result.amount)) && Number(result.amount) > 0) patch.amount = Number(result.amount);
+      if (result.memo) patch.memo = result.memo;
+      const matched = matchVendorByName(result.vendorName);
+      if (matched) {
+        patch.vendorId = matched.id;
+        const sug = _vendorSuggest({ vendorId: matched.id, vendorName: matched.name });
+        if (sug?.accountCode) patch.glAccount = sug.accountCode;
+        setGlSuggestion(sug);
+      } else if (result.vendorName) {
+        // Surface unmatched vendor name so the user can pick the right one
+        toast?.push?.(`OCR detected vendor "${result.vendorName}" — not in vendor list. Pick or create one.`, { tone: "info", duration: 6000 });
+      }
+      setDraft(d => ({ ...d, ...patch }));
+      toast?.push?.("Invoice fields extracted — review and post.", { tone: "success" });
+    } catch (err) {
+      setOcrError(err?.message || "OCR failed");
+      toast?.push?.(`OCR failed: ${err?.message || "unknown"}`, { tone: "error" });
+    } finally {
+      setOcrBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  const applySuggestion = () => {
+    if (glSuggestion?.accountCode) handle("glAccount", glSuggestion.accountCode);
+  };
+
   const valid = draft.vendorId && draft.propertyId && draft.amount > 0 && draft.issuedDate && draft.dueDate;
 
   return (
     <Modal open onClose={onClose} title={invoice ? "Edit Invoice" : "New Invoice"} size="lg">
       <div className="space-y-4">
+        {!invoice && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3.5 flex items-start gap-3">
+            <div className="flex-shrink-0 w-8 h-8 rounded-md bg-amber-100 flex items-center justify-center text-amber-700">
+              <Upload size={16} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-stone-900">Upload invoice — AI auto-fill</div>
+              <div className="text-xs text-stone-600 mt-0.5">PDF or image. Vendor, amount, dates, and GL coding are pre-filled.</div>
+              {ocrError && <div className="text-xs text-rose-700 mt-1.5">{ocrError}</div>}
+            </div>
+            <div>
+              <input
+                ref={fileRef}
+                type="file"
+                accept="application/pdf,image/*"
+                onChange={onUploadOcr}
+                className="hidden"
+                id="ocrInvoiceFile"
+              />
+              <Button
+                variant="accent"
+                size="sm"
+                onClick={() => fileRef.current?.click()}
+                disabled={ocrBusy}
+              >
+                {ocrBusy ? "Extracting…" : <><Paperclip size={14} />Choose file</>}
+              </Button>
+            </div>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-4">
           <Select label="Vendor" value={draft.vendorId} onChange={v => handle("vendorId", v)}
             options={state.vendors.map(v => ({ value: v.id, label: `${v.name} · ${v.category}` }))} />
@@ -8477,7 +8584,18 @@ function InvoiceModal({ invoice, ctx, onSave, onClose }) {
         </div>
         <div className="grid grid-cols-2 gap-4">
           <Input label="Amount ($)" type="number" value={draft.amount} onChange={v => handle("amount", Number(v))} />
-          <Input label="GL Account" value={draft.glAccount} onChange={v => handle("glAccount", v)} placeholder="e.g. 5210" />
+          <div>
+            <Input label="GL Account" value={draft.glAccount} onChange={v => handle("glAccount", v)} placeholder="e.g. 5210" />
+            {glSuggestion && glSuggestion.accountCode !== draft.glAccount && (
+              <button
+                type="button"
+                onClick={applySuggestion}
+                className="mt-1 text-xs text-amber-700 hover:text-amber-900 underline decoration-dotted"
+              >
+                Suggested: {glSuggestion.accountCode} ({Math.round((glSuggestion.confidence || 0) * 100)}% · {glSuggestion.reason})
+              </button>
+            )}
+          </div>
         </div>
         <Textarea label="Memo / Notes" value={draft.memo} onChange={v => handle("memo", v)} rows={3} placeholder="Description of goods/services or reference" />
         <AttachmentsPanel
@@ -11327,11 +11445,74 @@ function BankRecPane({ ctx }) {
   const [statementBalance, setStatementBalance] = useState(0);
   const [showImport, setShowImport] = useState(false);
   const [imported, setImported] = useState([]);   // bank statement transactions in memory
+  const [quickPostDraft, setQuickPostDraft] = useState(null);
 
   const rec = useMemo(
     () => _reconcile(ledger, bankCode, imported, asOf),
     [ledger, bankCode, imported, asOf]
   );
+
+  // Smart matches across the whole back-office: invoices, payroll, and JEs.
+  // Confidence-scored so high-confidence pairs can be batch-applied.
+  const smart = useMemo(() => _matchBankTxns({
+    bankTxns: imported,
+    journalEntries: state.journalEntries || [],
+    invoices: state.invoices || [],
+    payrollRuns: state.payrollRuns || [],
+    windowDays: 4,
+    tolerance: 0.5,
+  }), [imported, state.journalEntries, state.invoices, state.payrollRuns]);
+
+  const openQuickPost = (b) => {
+    const isDeposit = (b.amount || 0) >= 0;
+    const amt = Math.abs(b.amount || 0);
+    setQuickPostDraft({
+      id: newId("je"),
+      date: b.date || asOf,
+      propertyId: activeProperty || accessibleProperties[0]?.id,
+      description: `Bank: ${b.description || "Manual posting"}`.slice(0, 120),
+      source: "manual",
+      lines: [
+        // Bank-side line: deposits debit bank, withdrawals credit bank
+        { accountCode: bankCode, debit: isDeposit ? amt : 0, credit: isDeposit ? 0 : amt, memo: b.description || "" },
+        // Contra side defaults to Uncategorized — user picks the right account before save
+        { accountCode: "9999", debit: isDeposit ? 0 : amt, credit: isDeposit ? amt : 0, memo: "Recode this line" },
+      ],
+      posted: false,
+    });
+  };
+
+  const saveQuickPost = (entry) => {
+    try {
+      // Strict pre-post validation
+      const { closedPeriods = [] } = state;
+      const { assertPostable } = window.__hotelOps_gl || {};
+      // Lightweight inline assert without dynamic import — JE balance + lines presence
+      const drs = (entry.lines || []).reduce((s, l) => s + (Number(l.debit) || 0), 0);
+      const crs = (entry.lines || []).reduce((s, l) => s + (Number(l.credit) || 0), 0);
+      if (Math.abs(drs - crs) > 0.005 || drs === 0) {
+        toast?.push?.("Entry is unbalanced — debits must equal credits.", { tone: "error" });
+        return;
+      }
+      if (_isJournalLocked(entry, closedPeriods)) {
+        toast?.push?.(`Cannot post — ${entry.date.slice(0, 7)} is closed.`, { tone: "error" });
+        return;
+      }
+      const finalized = {
+        ...entry,
+        posted: true,
+        persistedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser?.id,
+      };
+      update({ journalEntries: [...(state.journalEntries || []), _withTenant(finalized)] });
+      pushActivity(ctx, "je.quick_post", { entryId: finalized.id, from: "bankrec" });
+      toast?.push?.("Journal entry posted.", { tone: "success" });
+      setQuickPostDraft(null);
+    } catch (e) {
+      toast?.push?.(e?.message || "Could not post entry", { tone: "error" });
+    }
+  };
 
   const adjustedBalance = rec.ledgerBalance + rec.outstandingBank.reduce((s, b) => s + b.amount, 0) - rec.outstandingLedger.reduce((s, l) => s + l.amount, 0);
   const reconciled = Math.abs((Number(statementBalance) || 0) - adjustedBalance) < 0.01;
@@ -11447,6 +11628,53 @@ function BankRecPane({ ctx }) {
         </Card>
       </div>
 
+      {/* Smart cross-system match candidates */}
+      {imported.length > 0 && smart.matches.length > 0 && (
+        <Card className="overflow-hidden">
+          <div className="px-5 py-3 border-b border-stone-200 bg-sky-50 flex items-center justify-between">
+            <div>
+              <h3 className="font-display text-lg text-stone-900">Smart Match · {smart.matches.length}</h3>
+              <p className="text-xs text-stone-500 mt-0.5">High-confidence pairs across invoices, payroll, and journals.</p>
+            </div>
+            <span className="text-xs uppercase tracking-wider text-sky-700 font-semibold">AI Match</span>
+          </div>
+          <table className="w-full text-sm">
+            <thead className="bg-stone-50 text-stone-500 text-xs uppercase tracking-wider">
+              <tr>
+                <th className="text-left px-4 py-2 font-medium">Date</th>
+                <th className="text-left px-4 py-2 font-medium">Bank Description</th>
+                <th className="text-left px-4 py-2 font-medium">Matched To</th>
+                <th className="text-right px-4 py-2 font-medium">Amount</th>
+                <th className="text-right px-4 py-2 font-medium w-20">Conf.</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {smart.matches.slice(0, 50).map((m, i) => {
+                const refLabel = m.type === "invoice" ? `Invoice ${m.ref.number || m.ref.invoiceNumber || m.id}`
+                  : m.type === "payroll" ? `Payroll ${m.ref.periodStart || ""} – ${m.ref.periodEnd || ""}`
+                  : `JE ${m.ref.id}`;
+                const confPct = Math.round((m.score || 0) * 100);
+                const confColor = confPct >= 90 ? "text-emerald-700" : confPct >= 70 ? "text-amber-700" : "text-stone-600";
+                return (
+                  <tr key={`sm_${i}`} className="hover:bg-stone-50">
+                    <td className="px-4 py-1.5 tabular text-stone-700 w-24">{fmtDate(m.txn.date)}</td>
+                    <td className="px-4 py-1.5 text-stone-700">{m.txn.description || "—"}</td>
+                    <td className="px-4 py-1.5 text-stone-700">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider font-bold bg-stone-100 text-stone-600">{m.type}</span>
+                        {refLabel}
+                      </span>
+                    </td>
+                    <td className="px-4 py-1.5 text-right tabular font-semibold">{fmtMoney(m.txn.amount)}</td>
+                    <td className={`px-4 py-1.5 text-right tabular font-semibold ${confColor}`}>{confPct}%</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
       {/* Matched */}
       {rec.matchedPairs.length > 0 && (
         <Card className="overflow-hidden">
@@ -11493,6 +11721,16 @@ function BankRecPane({ ctx }) {
                     <td className="px-4 py-1.5 tabular text-stone-700 w-24">{fmtDate(b.date)}</td>
                     <td className="px-4 py-1.5 text-stone-700">{b.description || "—"}</td>
                     <td className={`px-4 py-1.5 text-right tabular font-semibold ${b.amount >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{fmtMoney(b.amount)}</td>
+                    <td className="px-2 py-1.5 text-right w-20">
+                      <button
+                        type="button"
+                        onClick={() => openQuickPost(b)}
+                        className="text-[10px] uppercase tracking-wider font-semibold text-sky-700 hover:text-sky-900 px-2 py-1 rounded bg-sky-50 hover:bg-sky-100"
+                        title="Create a balancing journal entry for this bank line"
+                      >
+                        Post JE
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -11552,6 +11790,17 @@ function BankRecPane({ ctx }) {
             </tbody>
           </table>
         </Card>
+      )}
+
+      {quickPostDraft && (
+        <JournalEntryModal
+          entry={quickPostDraft}
+          chart={chart}
+          properties={accessibleProperties}
+          currentUser={currentUser}
+          onClose={() => setQuickPostDraft(null)}
+          onSave={saveQuickPost}
+        />
       )}
     </div>
   );

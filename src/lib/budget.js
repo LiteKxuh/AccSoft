@@ -106,8 +106,19 @@ export function pacing(actual, budget, asOfDate) {
   const month = budget.month;
   const [yy, mm] = month.split("-").map(Number);
   const daysInMonth = new Date(yy, mm, 0).getDate();
-  const dt = asOfDate ? new Date(asOfDate) : new Date();
-  const dayInMonth = (dt.getFullYear() === yy && dt.getMonth() === mm - 1) ? dt.getDate() : daysInMonth;
+  // Parse YYYY-MM-DD as a plain calendar date to avoid local-timezone drift
+  // off the UTC-midnight parse that `new Date("2026-05-05")` would do.
+  let dy = null, dm = null, dd = null;
+  if (asOfDate && typeof asOfDate === "string" && /^\d{4}-\d{2}-\d{2}/.test(asOfDate)) {
+    [dy, dm, dd] = asOfDate.slice(0, 10).split("-").map(Number);
+  } else if (asOfDate) {
+    const dt = new Date(asOfDate);
+    dy = dt.getFullYear(); dm = dt.getMonth() + 1; dd = dt.getDate();
+  } else {
+    const now = new Date();
+    dy = now.getFullYear(); dm = now.getMonth() + 1; dd = now.getDate();
+  }
+  const dayInMonth = (dy === yy && dm === mm) ? dd : daysInMonth;
   const expectedToDate = total * (dayInMonth / daysInMonth);
   const actualToDate = actual?.totalRevenue || 0;
   return {
