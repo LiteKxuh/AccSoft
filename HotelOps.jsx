@@ -120,6 +120,10 @@ import { reserveKey as _idemReserve, apPayKey as _idemApPayKey, payrollPostKey a
 import { AuditTrailPane as _AuditTrailPane } from "./src/lib/AuditTrailPane.jsx";
 import { OwnerPortalPane as _OwnerPortalPane } from "./src/lib/OwnerPortalPane.jsx";
 import { summarizePortfolio as _capexSummary, makeProject as _makeCapex } from "./src/lib/capex.js";
+import { StatePane as _StatePane } from "./src/lib/StatePane.jsx";
+import { AutomationPane as _AutomationPane } from "./src/lib/AutomationPane.jsx";
+import { ForensicsRiskPane as _ForensicsRiskPane } from "./src/lib/ForensicsRiskPane.jsx";
+import { CommandCenterPane as _CommandCenterPane } from "./src/lib/CommandCenterPane.jsx";
 import {
   generateEFW2 as _generateEFW2,
   generate1099NECFire as _generate1099Fire,
@@ -4904,6 +4908,10 @@ function AccountingModule({ ctx }) {
             { id: "forensics", label: "Forensics", icon: Shield, badge: "GL" },
             { id: "audit", label: "Audit Trail", icon: ClipboardList, badge: "GL" },
             { id: "owner", label: "Owner Portal", icon: Building2 },
+            { id: "state", label: "Hotel State", icon: TrendingUp, badge: "AI" },
+            { id: "automation", label: "Automation", icon: Play, badge: "AI" },
+            { id: "risk", label: "Forensics Risk", icon: Shield, badge: "AI" },
+            { id: "command", label: "Command Center", icon: Building2, badge: "Exec" },
             { id: "reconcile", label: "Reconcile", icon: FileCheck2 },
             { id: "reports", label: "Reports", icon: ClipboardList },
             { id: "departments", label: "Departments", icon: Hash },
@@ -4951,6 +4959,10 @@ function AccountingModule({ ctx }) {
       {tab === "forensics" && <_ForensicsPane ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
       {tab === "audit" && <_AuditTrailPane ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
       {tab === "owner" && <_OwnerPortalPane ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
+      {tab === "state" && <_StatePane ctx={ctx} enrichReport={enrichReport} />}
+      {tab === "automation" && <_AutomationPane ctx={ctx} enrichReport={enrichReport} />}
+      {tab === "risk" && <_ForensicsRiskPane ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
+      {tab === "command" && <_CommandCenterPane ctx={ctx} enrichReport={enrichReport} />}
       {tab === "reconcile" && <ReconcilePane ctx={ctx} setTab={setTab} />}
       {tab === "reports" && <CustomReportsPane ctx={ctx} />}
       {tab === "departments" && <DepartmentsPane ctx={ctx} />}
