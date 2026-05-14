@@ -112,6 +112,8 @@ import { buildOwnerStatement as _buildOwnerStatement } from "./src/lib/ownerStat
 import { computeManagementFees as _computeMgmtFees, managementAgreementAt as _mgmtAt, validateCapTable as _validateCapTable } from "./src/lib/ownership.js";
 import { NightAuditHealthCard as _NightAuditHealthCard } from "./src/lib/NightAuditHealth.jsx";
 import { PacePane as _PacePane } from "./src/lib/PacePane.jsx";
+import { ReportsHub as _ReportsHub } from "./src/lib/ReportsHub.jsx";
+import { can as _rbacCan, approveLimit as _rbacApproveLimit, scope as _rbacScope } from "./src/lib/rbac.js";
 import {
   generateEFW2 as _generateEFW2,
   generate1099NECFire as _generate1099Fire,
@@ -291,6 +293,23 @@ const ROLE_PERMS = {
   housekeeping: { all: false, properties: "self", canEditAll: false, canRunPayroll: false, canManageUsers: false, canIssueWriteups: false, canEditAnyShift: false, canViewAllReports: false },
   maintenance: { all: false, properties: "self", canEditAll: false, canRunPayroll: false, canManageUsers: false, canIssueWriteups: false, canEditAnyShift: false, canViewAllReports: false },
 };
+
+/**
+ * Bridge from the legacy role strings used in employee.role to the
+ * granular RBAC role keys in src/lib/rbac.js. Lets existing users
+ * inherit a sensible default while ownership/regional/controller can
+ * be assigned explicitly via employee.rbacRole.
+ */
+function mapLegacyRole(role) {
+  switch (role) {
+    case "admin":        return "controller";
+    case "manager":      return "gm";
+    case "front_desk":   return "front-desk";
+    case "housekeeping": return "front-desk";
+    case "maintenance":  return "front-desk";
+    default:             return "front-desk";
+  }
+}
 
 /* =========================================================================
    UI PRIMITIVES
@@ -4874,6 +4893,7 @@ function AccountingModule({ ctx }) {
             { id: "trends", label: "Trends", icon: TrendingUp },
             { id: "forecast", label: "Forecast", icon: TrendingUp },
             { id: "pace", label: "Pace", icon: TrendingUp, badge: "RM" },
+            { id: "reportshub", label: "Reports Hub", icon: ClipboardList, badge: "GL" },
             { id: "reconcile", label: "Reconcile", icon: FileCheck2 },
             { id: "reports", label: "Reports", icon: ClipboardList },
             { id: "departments", label: "Departments", icon: Hash },
@@ -4916,6 +4936,7 @@ function AccountingModule({ ctx }) {
       {tab === "trends" && <TrendsPane ctx={ctx} />}
       {tab === "forecast" && <ForecastPane ctx={ctx} />}
       {tab === "pace" && <_PacePane ctx={ctx} enrichReport={enrichReport} />}
+      {tab === "reportshub" && <_ReportsHub ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
       {tab === "reconcile" && <ReconcilePane ctx={ctx} setTab={setTab} />}
       {tab === "reports" && <CustomReportsPane ctx={ctx} />}
       {tab === "departments" && <DepartmentsPane ctx={ctx} />}
