@@ -125,6 +125,8 @@ import { AutomationPane as _AutomationPane } from "./src/lib/AutomationPane.jsx"
 import { ForensicsRiskPane as _ForensicsRiskPane } from "./src/lib/ForensicsRiskPane.jsx";
 import { CommandCenterPane as _CommandCenterPane } from "./src/lib/CommandCenterPane.jsx";
 import { AgentBriefingPane as _AgentBriefingPane } from "./src/lib/AgentBriefingPane.jsx";
+import { RevenueEnginePane as _RevenueEnginePane } from "./src/lib/RevenueEnginePane.jsx";
+import { LaborOptimizationPane as _LaborOptimizationPane } from "./src/lib/LaborOptimizationPane.jsx";
 import {
   generateEFW2 as _generateEFW2,
   generate1099NECFire as _generate1099Fire,
@@ -4914,6 +4916,8 @@ function AccountingModule({ ctx }) {
             { id: "risk", label: "Forensics Risk", icon: Shield, badge: "AI" },
             { id: "command", label: "Command Center", icon: Building2, badge: "Exec" },
             { id: "agents", label: "AI Agents", icon: Briefcase, badge: "AI" },
+            { id: "rmengine", label: "Revenue Engine", icon: TrendingUp, badge: "RM" },
+            { id: "laboropt", label: "Labor Optimization", icon: Users, badge: "HR" },
             { id: "reconcile", label: "Reconcile", icon: FileCheck2 },
             { id: "reports", label: "Reports", icon: ClipboardList },
             { id: "departments", label: "Departments", icon: Hash },
@@ -4966,6 +4970,8 @@ function AccountingModule({ ctx }) {
       {tab === "risk" && <_ForensicsRiskPane ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
       {tab === "command" && <_CommandCenterPane ctx={ctx} enrichReport={enrichReport} />}
       {tab === "agents" && <_AgentBriefingPane ctx={ctx} role={ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role)} enrichReport={enrichReport} />}
+      {tab === "rmengine" && <_RevenueEnginePane ctx={ctx} enrichReport={enrichReport} />}
+      {tab === "laboropt" && <_LaborOptimizationPane ctx={ctx} enrichReport={enrichReport} />}
       {tab === "reconcile" && <ReconcilePane ctx={ctx} setTab={setTab} />}
       {tab === "reports" && <CustomReportsPane ctx={ctx} />}
       {tab === "departments" && <DepartmentsPane ctx={ctx} />}
