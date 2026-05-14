@@ -180,7 +180,7 @@ export function snapshot(state, { propertyId, asOf, enrichReport = null } = {}) 
   if (auditResult && auditResult.status === "fail") riskFlags.push({ code: "audit.fail", severity: "high", label: "Night audit hard-fail" });
   if (anomalyList.some(a => a.severity === "high")) riskFlags.push({ code: "anomaly.high", severity: "high", label: "High-severity anomaly detected" });
   if (pendingDollar > 50000) riskFlags.push({ code: "approvals.backlog", severity: "medium", label: `$${pendingDollar.toFixed(0)} pending approval` });
-  if (mtdRev > 0 && (mtdLaborKpi?.totalCost / mtdRev) > 0.40) riskFlags.push({ code: "labor.high", severity: "medium", label: `Labor ${(((mtdLaborKpi?.totalCost || 0) / mtdRev) * 100).toFixed(0)}% of revenue` });
+  if (mtdRev > 0 && (mtdLaborKpi?.laborCost / mtdRev) > 0.40) riskFlags.push({ code: "labor.high", severity: "medium", label: `Labor ${(((mtdLaborKpi?.laborCost || 0) / mtdRev) * 100).toFixed(0)}% of revenue` });
   if (ap.totals.b120 > 0) riskFlags.push({ code: "ap.over120", severity: "medium", label: `${ap.totals.b120.toFixed(0)} A/P over 120 days` });
   if (capex.statusCounts?.overBudget > 0) riskFlags.push({ code: "capex.overbudget", severity: "medium", label: `${capex.statusCounts.overBudget} CapEx project(s) over budget` });
   if (compression) riskFlags.push({ code: "compression", severity: "low", label: "Forward compression detected — review pricing controls" });
@@ -227,9 +227,9 @@ export function snapshot(state, { propertyId, asOf, enrichReport = null } = {}) 
       cashCovered: fromCents(cashCents),
     },
     labor: {
-      mtdCost: mtdLaborKpi?.totalCost || 0,
-      mtdPctRev: mtdRev > 0 ? (mtdLaborKpi?.totalCost || 0) / mtdRev : 0,
-      todayCost: todayLaborKpi?.totalCost || 0,
+      mtdCost: mtdLaborKpi?.laborCost || 0,
+      mtdPctRev: mtdRev > 0 ? (mtdLaborKpi?.laborCost || 0) / mtdRev : 0,
+      todayCost: todayLaborKpi?.laborCost || 0,
       scheduledHours: totalScheduled,
       actualHours: totalActual,
       driftPct: totalScheduled > 0 ? (totalActual - totalScheduled) / totalScheduled : 0,
