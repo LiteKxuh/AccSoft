@@ -230,8 +230,8 @@ export function can(role, action, ctx = {}) {
     if (required === "region" && !(def.scope === "region" || def.scope === "portfolio")) return false;
     if (required === "property" && !(def.scope === "property" || def.scope === "region" || def.scope === "portfolio")) return false;
   }
-  // Approval limit check for JE approvals
-  if (action === "je.approve" && ctx.amount != null) {
+  // Approval limit check for any approval action carrying an amount
+  if ((action === "je.approve" || action === "ap.approve") && ctx.amount != null) {
     if ((def.approveLimit ?? 0) < ctx.amount) return false;
   }
   return true;

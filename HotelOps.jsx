@@ -114,6 +114,9 @@ import { NightAuditHealthCard as _NightAuditHealthCard } from "./src/lib/NightAu
 import { PacePane as _PacePane } from "./src/lib/PacePane.jsx";
 import { ReportsHub as _ReportsHub } from "./src/lib/ReportsHub.jsx";
 import { can as _rbacCan, approveLimit as _rbacApproveLimit, scope as _rbacScope } from "./src/lib/rbac.js";
+import { ForensicsPane as _ForensicsPane } from "./src/lib/ForensicsPane.jsx";
+import { ApprovalInboxPane as _ApprovalInboxPane } from "./src/lib/ApprovalInboxPane.jsx";
+import { reserveKey as _idemReserve, apPayKey as _idemApPayKey, payrollPostKey as _idemPayrollKey } from "./src/lib/idempotency.js";
 import {
   generateEFW2 as _generateEFW2,
   generate1099NECFire as _generate1099Fire,
@@ -4894,6 +4897,8 @@ function AccountingModule({ ctx }) {
             { id: "forecast", label: "Forecast", icon: TrendingUp },
             { id: "pace", label: "Pace", icon: TrendingUp, badge: "RM" },
             { id: "reportshub", label: "Reports Hub", icon: ClipboardList, badge: "GL" },
+            { id: "inbox", label: "Approvals", icon: CheckCircle2, badge: "GL" },
+            { id: "forensics", label: "Forensics", icon: Shield, badge: "GL" },
             { id: "reconcile", label: "Reconcile", icon: FileCheck2 },
             { id: "reports", label: "Reports", icon: ClipboardList },
             { id: "departments", label: "Departments", icon: Hash },
@@ -4937,6 +4942,8 @@ function AccountingModule({ ctx }) {
       {tab === "forecast" && <ForecastPane ctx={ctx} />}
       {tab === "pace" && <_PacePane ctx={ctx} enrichReport={enrichReport} />}
       {tab === "reportshub" && <_ReportsHub ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
+      {tab === "inbox" && <_ApprovalInboxPane ctx={ctx} role={ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role)} onUpdate={(patch) => ctx.update(patch)} />}
+      {tab === "forensics" && <_ForensicsPane ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
       {tab === "reconcile" && <ReconcilePane ctx={ctx} setTab={setTab} />}
       {tab === "reports" && <CustomReportsPane ctx={ctx} />}
       {tab === "departments" && <DepartmentsPane ctx={ctx} />}
