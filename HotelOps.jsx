@@ -102,6 +102,16 @@ import { AiInsightsCard as _AiInsightsCard } from "./src/lib/AiInsights.jsx";
 import { apAging as _apAging, arAging as _arAging } from "./src/lib/aging.js";
 import { buildFlash as _buildFlash, buildForecastVariance as _buildForecastVariance } from "./src/lib/flashReport.js";
 import { listViews as _listViews, saveView as _saveView, deleteView as _deleteView, touchView as _touchView } from "./src/lib/savedViews.js";
+import { buildCorrectionPair as _buildCorrectionPair, markVoided as _markVoided, buildReversal as _buildReversal } from "./src/lib/adjustment.js";
+import { beginSession as _psBegin, attachToSession as _psAttach, completeSession as _psComplete } from "./src/lib/postingSession.js";
+import { stampEntry as _chainStamp, verifyChain as _chainVerify, chainOrder as _chainOrder } from "./src/lib/ledgerChain.js";
+import { runNightAudit as _runNightAudit } from "./src/lib/nightAudit.js";
+import { buildPace as _buildPace } from "./src/lib/paceReport.js";
+import { buildDepartmentPnl as _buildDepartmentPnl } from "./src/lib/departmentPnl.js";
+import { buildOwnerStatement as _buildOwnerStatement } from "./src/lib/ownerStatement.js";
+import { computeManagementFees as _computeMgmtFees, managementAgreementAt as _mgmtAt, validateCapTable as _validateCapTable } from "./src/lib/ownership.js";
+import { NightAuditHealthCard as _NightAuditHealthCard } from "./src/lib/NightAuditHealth.jsx";
+import { PacePane as _PacePane } from "./src/lib/PacePane.jsx";
 import {
   generateEFW2 as _generateEFW2,
   generate1099NECFire as _generate1099Fire,
@@ -4863,6 +4873,7 @@ function AccountingModule({ ctx }) {
             { id: "portfolio", label: "Portfolio", icon: Building2 },
             { id: "trends", label: "Trends", icon: TrendingUp },
             { id: "forecast", label: "Forecast", icon: TrendingUp },
+            { id: "pace", label: "Pace", icon: TrendingUp, badge: "RM" },
             { id: "reconcile", label: "Reconcile", icon: FileCheck2 },
             { id: "reports", label: "Reports", icon: ClipboardList },
             { id: "departments", label: "Departments", icon: Hash },
@@ -4904,6 +4915,7 @@ function AccountingModule({ ctx }) {
       {tab === "portfolio" && <PortfolioPane ctx={ctx} setTab={setTab} />}
       {tab === "trends" && <TrendsPane ctx={ctx} />}
       {tab === "forecast" && <ForecastPane ctx={ctx} />}
+      {tab === "pace" && <_PacePane ctx={ctx} enrichReport={enrichReport} />}
       {tab === "reconcile" && <ReconcilePane ctx={ctx} setTab={setTab} />}
       {tab === "reports" && <CustomReportsPane ctx={ctx} />}
       {tab === "departments" && <DepartmentsPane ctx={ctx} />}
@@ -5072,6 +5084,9 @@ function FlashReportPane({ ctx, setTab }) {
           <IndexTile label="RevPAR Index" value={baseline.last30.revpar ? (focusReport.revpar / baseline.last30.revpar) * 100 : null} hint="100 = property's own 30-day average" highlight />
         </div>
       )}
+
+      {/* Night Audit Health — programmatic reconciliation: settlement, occupancy math, tax, no-shows, cash drop */}
+      <_NightAuditHealthCard report={focusReport} propertySettings={property?.settings} />
 
       {/* Ops Intelligence — deterministic anomaly detection + optional AI narrative */}
       <_AiInsightsCard report={focusReport} reports={state.reports} propertyName={property?.name} />
@@ -10365,6 +10380,38 @@ function JournalEntriesPane({ ctx }) {
       toast?.push?.("Auto-generated journals can't be edited directly. Edit the source record (report / invoice / payroll run) instead.", { tone: "error", duration: 6000 });
       return;
     }
+
+    // ----- Immutable-ledger guard -----
+    // If the user is editing a manual JE that's already posted (not void),
+    // route through the correction pair builder: post a reversal + the new
+    // version, mark the original as voided. The original is never mutated.
+    const existing = draft.id ? (state.journalEntries || []).find(e => e.id === draft.id) : null;
+    if (existing && existing.posted && !existing.void && draft.posted) {
+      const materialChange = JSON.stringify(existing.lines) !== JSON.stringify(draft.lines)
+        || existing.description !== draft.description
+        || existing.date !== draft.date
+        || existing.propertyId !== draft.propertyId;
+      if (materialChange) {
+        try {
+          const { reversal, replacement, correctionGroupId } = _buildCorrectionPair(existing, draft, {
+            chart, closedPeriods: state.closedPeriods, user: currentUser, reason: "Manual correction",
+          });
+          const voidedOrig = _markVoided(existing, reversal, { user: currentUser, reason: "Manual correction" });
+          const stampedRev = _withTenant({ ...reversal, persistedAt: new Date().toISOString(), createdBy: currentUser?.id, approvalState: "approved" });
+          const stampedRep = _withTenant({ ...replacement, persistedAt: new Date().toISOString(), createdBy: currentUser?.id, approvalState: _requiresApproval(replacement) ? (perms.canRunPayroll ? "approved" : "pending") : "approved" });
+          const rest = (state.journalEntries || []).filter(e => e.id !== existing.id);
+          update({ journalEntries: [...rest, voidedOrig, stampedRev, stampedRep] });
+          pushActivity(ctx, "journal.correct", { originalId: existing.id, reversalId: reversal.id, replacementId: replacement.id, correctionGroupId });
+          toast?.push?.("Posted correction pair · original voided, reversal + replacement posted.", { tone: "success", duration: 6500 });
+          setEditing(null);
+          return;
+        } catch (e) {
+          toast?.push?.(`Cannot post correction: ${e?.message || "unknown error"}`, { tone: "error", duration: 6000 });
+          return;
+        }
+      }
+    }
+
     const others = (state.journalEntries || []).filter(e => e.id !== draft.id);
     const isManager = !!perms.canRunPayroll;  // managers / admins can self-approve
     const needsApproval = _requiresApproval(draft);
@@ -10374,7 +10421,6 @@ function JournalEntriesPane({ ctx }) {
       posted: !!draft.posted,
       void: false,
       source: draft.source || "manual",
-      // If a large entry was created by a manager, auto-approve. Otherwise mark pending.
       approvalState: !needsApproval ? "approved" : (isManager ? "approved" : "pending"),
       approvedBy: !needsApproval ? null : (isManager ? currentUser.id : null),
       approvedAt: !needsApproval ? null : (isManager ? new Date().toISOString() : null),
