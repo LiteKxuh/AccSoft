@@ -11,6 +11,11 @@ import { PAYROLL_AUDIT_AGENT } from "./payrollAuditAgent.js";
 import { OVERTIME_PREVENTION_AGENT } from "./overtimePreventionAgent.js";
 import { HOUSEKEEPING_AGENT } from "./housekeepingProductivityAgent.js";
 import { GM_LABOR_BRIEFING_AGENT } from "./gmLaborBriefingAgent.js";
+import { PORTFOLIO_RISK_AGENT } from "./portfolioRiskAgent.js";
+import { OWNERSHIP_BRIEFING_AGENT } from "./ownershipBriefingAgent.js";
+import { FORECAST_ANALYST_AGENT } from "./forecastAnalystAgent.js";
+import { AP_INTELLIGENCE_AGENT } from "./apIntelligenceAgent.js";
+import { GUEST_EXPERIENCE_AGENT } from "./guestExperienceAgent.js";
 
 export const AGENTS = [
   GM_BRIEFING_AGENT,
@@ -22,8 +27,13 @@ export const AGENTS = [
   OVERTIME_PREVENTION_AGENT,
   HOUSEKEEPING_AGENT,
   AP_REVIEW_AGENT,
+  AP_INTELLIGENCE_AGENT,
   PAYROLL_AUDIT_AGENT,
   CONTROLLER_AGENT,
+  PORTFOLIO_RISK_AGENT,
+  OWNERSHIP_BRIEFING_AGENT,
+  FORECAST_ANALYST_AGENT,
+  GUEST_EXPERIENCE_AGENT,
 ];
 
 export function agentById(id) {

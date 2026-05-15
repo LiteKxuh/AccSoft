@@ -6,6 +6,11 @@ import { AP_REVIEW_AGENT } from "./apReviewAgent.js";
 import { CONTROLLER_AGENT } from "./controllerAgent.js";
 import { GM_BRIEFING_AGENT } from "./gmBriefingAgent.js";
 import { REVENUE_AGENT } from "./revenueAgent.js";
+import { PORTFOLIO_RISK_AGENT } from "./portfolioRiskAgent.js";
+import { OWNERSHIP_BRIEFING_AGENT } from "./ownershipBriefingAgent.js";
+import { FORECAST_ANALYST_AGENT } from "./forecastAnalystAgent.js";
+import { AP_INTELLIGENCE_AGENT } from "./apIntelligenceAgent.js";
+import { GUEST_EXPERIENCE_AGENT } from "./guestExperienceAgent.js";
 import { AGENTS, agentById } from "./index.js";
 
 const cleanReport = (date, propertyId = "p1") => ({
@@ -160,5 +165,91 @@ describe("Revenue Agent — deterministic", () => {
     const briefing = REVENUE_AGENT.buildBriefing({ state, propertyId: "p1", asOf: "2026-05-07" });
     const r = await runAgent({ agent: REVENUE_AGENT, briefing, ctx: { role: "revenue-manager" } });
     expect(r.deterministic.recommendations[0].action).toMatch(/Insufficient/);
+  });
+});
+
+describe("Portfolio Risk Agent — deterministic", () => {
+  it("ranks worst-risk properties", async () => {
+    const dup = (n, pid) => ({
+      id: `inv_${pid}_${n}`, propertyId: pid, vendorId: "v1", amount: 1500,
+      number: "INV-001", issuedDate: "2026-05-10", dueDate: "2026-05-30",
+      status: "open",
+    });
+    const state = {
+      reports: seedReports(14, "p1"),
+      invoices: [dup(1, "p1"), dup(2, "p1"), dup(1, "p2")],
+    };
+    const briefing = PORTFOLIO_RISK_AGENT.buildBriefing({ state, propertyIds: ["p1", "p2"], asOf: "2026-05-14", period: { start: "2026-05-01", end: "2026-05-14" } });
+    expect(briefing.perProperty.length).toBe(2);
+    const r = await runAgent({ agent: PORTFOLIO_RISK_AGENT, briefing, ctx: { role: "controller" } });
+    expect(r.status).toBe("local");
+    expect(r.narrative.topRisks.length).toBeGreaterThan(0);
+  });
+});
+
+describe("Ownership Briefing Agent — deterministic", () => {
+  it("returns performance bullets with reports", async () => {
+    const state = { reports: seedReports(14, "p1") };
+    const briefing = OWNERSHIP_BRIEFING_AGENT.buildBriefing({ state, propertyId: "p1", asOf: "2026-05-14" });
+    const r = await runAgent({ agent: OWNERSHIP_BRIEFING_AGENT, briefing, ctx: { role: "ownership" } });
+    expect(r.narrative.performance.length).toBeGreaterThan(0);
+  });
+
+  it("emits no performance bullets without data", async () => {
+    const state = { reports: [] };
+    const briefing = OWNERSHIP_BRIEFING_AGENT.buildBriefing({ state, propertyId: "p1", asOf: "2026-05-14" });
+    const r = await runAgent({ agent: OWNERSHIP_BRIEFING_AGENT, briefing, ctx: { role: "ownership" } });
+    expect(r.narrative.performance.length).toBe(0);
+  });
+});
+
+describe("Forecast Analyst Agent — deterministic", () => {
+  it("notes insufficient history with no forecasts", async () => {
+    const state = { reports: seedReports(14, "p1"), forecasts: [] };
+    const briefing = FORECAST_ANALYST_AGENT.buildBriefing({ state, propertyId: "p1", asOf: "2026-05-14" });
+    const r = await runAgent({ agent: FORECAST_ANALYST_AGENT, briefing, ctx: { role: "revenue-manager" } });
+    expect(r.deterministic.findings[0]).toMatch(/forecast history/);
+  });
+});
+
+describe("AP Intelligence Agent — deterministic", () => {
+  it("flags duplicates and aging exposure together", async () => {
+    const old = new Date("2026-05-15"); old.setDate(old.getDate() - 130);
+    const state = {
+      invoices: [
+        { id: "a", vendorId: "v1", number: "INV-1", amount: 500, status: "open", issuedDate: "2026-05-01", approvalState: "approved", propertyId: "p1" },
+        { id: "b", vendorId: "v1", number: "INV-1", amount: 500, status: "open", issuedDate: "2026-05-02", approvalState: "approved", propertyId: "p1" },
+        { id: "c", vendorId: "v1", number: "OLD", amount: 60_000, status: "open", issuedDate: old.toISOString().slice(0, 10), dueDate: old.toISOString().slice(0, 10), approvalState: "approved", propertyId: "p1" },
+      ],
+      vendors: [{ id: "v1", name: "X" }],
+    };
+    const briefing = AP_INTELLIGENCE_AGENT.buildBriefing({ state, propertyId: "p1", asOf: "2026-05-15" });
+    const r = await runAgent({ agent: AP_INTELLIGENCE_AGENT, briefing, ctx: { role: "controller" } });
+    expect(r.deterministic.findings.some(f => /duplicate/.test(f))).toBe(true);
+    expect(r.deterministic.findings.some(f => /120 days/.test(f))).toBe(true);
+  });
+});
+
+describe("Guest Experience Agent — deterministic", () => {
+  it("returns no-feedback summary cleanly", async () => {
+    const state = { reports: seedReports(14, "p1"), guestFeedback: [] };
+    const briefing = GUEST_EXPERIENCE_AGENT.buildBriefing({ state, propertyId: "p1", asOf: "2026-05-14" });
+    const r = await runAgent({ agent: GUEST_EXPERIENCE_AGENT, briefing, ctx: { role: "gm" } });
+    expect(r.deterministic.findings[0]).toMatch(/No guest feedback/);
+  });
+
+  it("flags housekeeping when complaints concentrate there", async () => {
+    const state = {
+      reports: seedReports(14, "p1"),
+      guestFeedback: [
+        { id: "g1", propertyId: "p1", date: "2026-05-10", rating: 2, text: "dirty room, stained linen, mildew smell" },
+        { id: "g2", propertyId: "p1", date: "2026-05-11", rating: 1, text: "filthy room, hair on bedding, terrible" },
+        { id: "g3", propertyId: "p1", date: "2026-05-12", rating: 2, text: "dirty bathroom, awful" },
+        { id: "g4", propertyId: "p1", date: "2026-05-13", rating: 1, text: "mildew, dirty, disgusting" },
+      ],
+    };
+    const briefing = GUEST_EXPERIENCE_AGENT.buildBriefing({ state, propertyId: "p1", asOf: "2026-05-14", period: { start: "2026-05-01", end: "2026-05-14" } });
+    const r = await runAgent({ agent: GUEST_EXPERIENCE_AGENT, briefing, ctx: { role: "gm" } });
+    expect(r.deterministic.findings.some(f => /housekeeping/.test(f))).toBe(true);
   });
 });
