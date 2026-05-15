@@ -18,6 +18,8 @@ import { useToast as _useToast } from "./src/lib/toast.jsx";
 import { confirmDialog as _confirm, promptDialog as _prompt, alertDialog as _alert } from "./src/lib/dialog.jsx";
 import { PaneErrorBoundary as _PaneErrorBoundary } from "./src/lib/PaneErrorBoundary.jsx";
 import { DiagnosticsPane as _DiagnosticsPane } from "./src/lib/DiagnosticsPane.jsx";
+import { sanitizeChartData as _chartSafe } from "./src/lib/SafeChart.jsx";
+import { healthSnapshot as _healthSnapshot, subscribe as _diagSubscribe } from "./src/lib/diagnostics.js";
 import { commandBus as _commandBus } from "./src/lib/CommandPalette.jsx";
 import { forecast as _forecast } from "./src/lib/forecast.js";
 import { autoSeedBudgets as _autoSeedBudgets, actualsFor as _actualsFor, budgetTotal as _budgetTotal, pacing as _pacing, monthOf as _monthOf, emptyBudget as _emptyBudget } from "./src/lib/budget.js";
@@ -137,6 +139,32 @@ import {
   generateEFW2 as _generateEFW2,
   generate1099NECFire as _generate1099Fire,
 } from "./src/lib/efile.js";
+
+// Lightweight health indicator that subscribes to the diagnostics ring buffer
+// and surfaces a colored dot in the nav. Click jumps to the Diagnostics tab.
+function _HealthBadge({ onClick }) {
+  const [snap, setSnap] = useState(() => _healthSnapshot());
+  useEffect(() => {
+    const unsub = _diagSubscribe(() => setSnap(_healthSnapshot()));
+    return unsub;
+  }, []);
+  const dot = snap.status === "healthy" ? "bg-emerald-500"
+            : snap.status === "watch"   ? "bg-amber-500"
+                                        : "bg-rose-500";
+  const ring = snap.status === "healthy" ? "ring-emerald-200"
+             : snap.status === "watch"   ? "ring-amber-200"
+                                         : "ring-rose-200 animate-pulse";
+  const errs = snap.metrics?.errors + snap.metrics?.unhandledRejections;
+  return (
+    <button onClick={onClick}
+            title={`Runtime health: ${snap.status}${errs ? ` · ${errs} issue(s)` : ""}`}
+            className="ml-auto inline-flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium text-stone-500 hover:text-stone-800 rounded">
+      <span className={`w-2 h-2 rounded-full ${dot} ring-2 ${ring}`} />
+      <span className="hidden md:inline capitalize">{snap.status}</span>
+      {errs > 0 && <span className="tabular text-rose-600 font-semibold">{errs}</span>}
+    </button>
+  );
+}
 
 /* =========================================================================
    FONTS + GLOBAL STYLE
@@ -1843,7 +1871,7 @@ function ScorecardModule({ ctx }) {
         <Card className="lg:col-span-2 p-6">
           <h3 className="font-display text-lg text-stone-900 mb-4">30-day revenue trend</h3>
           <ResponsiveContainer width="100%" height={180}>
-            <AreaChart data={sparkData}>
+            <AreaChart data={_chartSafe(sparkData)}>
               <defs>
                 <linearGradient id="sc-grad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#b45309" stopOpacity={0.4} />
@@ -2209,7 +2237,7 @@ function Dashboard({ ctx }) {
             <button onClick={() => setView("accounting")} className="text-xs text-amber-700 hover:text-amber-800 font-medium">Open accounting →</button>
           </div>
           <ResponsiveContainer width="100%" height={240}>
-            <AreaChart data={last14} margin={{ top: 5, right: 5, left: 0, bottom: 5 }}>
+            <AreaChart data={_chartSafe(last14)} margin={{ top: 5, right: 5, left: 0, bottom: 5 }}>
               <defs>
                 <linearGradient id="rev" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#b45309" stopOpacity={0.4}/>
@@ -2228,7 +2256,7 @@ function Dashboard({ ctx }) {
         <Card className="p-6">
           <h3 className="font-display text-lg text-stone-900 mb-4">Occupancy Trend</h3>
           <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={last14}>
+            <LineChart data={_chartSafe(last14)}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" />
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#78716c" }} stroke="#d6d3d1" />
               <YAxis tick={{ fontSize: 11, fill: "#78716c" }} stroke="#d6d3d1" tickFormatter={v => `${Math.round(v)}%`} domain={[40, 100]} />
@@ -4948,6 +4976,7 @@ function AccountingModule({ ctx }) {
               </button>
             );
           })}
+          <_HealthBadge onClick={() => setTab("diagnostics")} />
         </div>
       </div>
 
@@ -7222,7 +7251,7 @@ function CompsetPane({ ctx }) {
           </div>
         </div>
         <ResponsiveContainer width="100%" height={300}>
-          <LineChart data={chartData}>
+          <LineChart data={_chartSafe(chartData)}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" />
             <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#78716c" }} stroke="#d6d3d1" />
             <YAxis tick={{ fontSize: 11, fill: "#78716c" }} stroke="#d6d3d1" tickFormatter={v => fmtMoney(v)} />
@@ -9807,7 +9836,7 @@ function TrendsPane({ ctx }) {
       <Card className="p-6">
         <h3 className="font-display text-lg text-stone-900 mb-4">Revenue &amp; Occupancy</h3>
         <ResponsiveContainer width="100%" height={320}>
-          <ComposedChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+          <ComposedChart data={_chartSafe(chartData)} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
             <defs>
               <linearGradient id="trev" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#b45309" stopOpacity={0.45}/>
@@ -9830,7 +9859,7 @@ function TrendsPane({ ctx }) {
         <Card className="p-6">
           <h3 className="font-display text-lg text-stone-900 mb-4">ADR &amp; RevPAR</h3>
           <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={chartData}>
+            <LineChart data={_chartSafe(chartData)}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" />
               <XAxis dataKey="dateShort" tick={{ fontSize: 11, fill: "#78716c" }} stroke="#d6d3d1" />
               <YAxis tick={{ fontSize: 11, fill: "#78716c" }} stroke="#d6d3d1" tickFormatter={v => fmtMoneyShort(v)} />
@@ -9843,7 +9872,7 @@ function TrendsPane({ ctx }) {
 
         <Card className="p-6">
           <h3 className="font-display text-lg text-stone-900 mb-4">Daily Revenue Heatmap</h3>
-          <DailyHeatmap data={chartData} />
+          <DailyHeatmap data={_chartSafe(chartData)} />
         </Card>
       </div>
     </div>
@@ -10024,7 +10053,7 @@ function ForecastPane({ ctx }) {
           </div>
         </div>
         <ResponsiveContainer width="100%" height={320}>
-          <ComposedChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+          <ComposedChart data={_chartSafe(chartData)} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
             <defs>
               <linearGradient id="band" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#fcd34d" stopOpacity={0.55} />
@@ -10240,7 +10269,7 @@ function DeptCard({ title, subtitle, total, grand, trend, color }) {
       <div className="font-display number-display text-4xl text-stone-900 font-semibold mb-1">{fmtMoney(total)}</div>
       <div className="text-xs text-stone-500 mb-4">{fmtPct(pct)} of departmental total</div>
       <ResponsiveContainer width="100%" height={70}>
-        <AreaChart data={trend}>
+        <AreaChart data={_chartSafe(trend)}>
           <defs>
             <linearGradient id={`dg-${color.replace("#","")}`} x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor={color} stopOpacity={0.3}/>
