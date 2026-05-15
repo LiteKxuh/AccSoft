@@ -127,6 +127,7 @@ import { CommandCenterPane as _CommandCenterPane } from "./src/lib/CommandCenter
 import { AgentBriefingPane as _AgentBriefingPane } from "./src/lib/AgentBriefingPane.jsx";
 import { RevenueEnginePane as _RevenueEnginePane } from "./src/lib/RevenueEnginePane.jsx";
 import { LaborOptimizationPane as _LaborOptimizationPane } from "./src/lib/LaborOptimizationPane.jsx";
+import { WorkforcePane as _WorkforcePane } from "./src/lib/WorkforcePane.jsx";
 import {
   generateEFW2 as _generateEFW2,
   generate1099NECFire as _generate1099Fire,
@@ -4918,6 +4919,7 @@ function AccountingModule({ ctx }) {
             { id: "agents", label: "AI Agents", icon: Briefcase, badge: "AI" },
             { id: "rmengine", label: "Revenue Engine", icon: TrendingUp, badge: "RM" },
             { id: "laboropt", label: "Labor Optimization", icon: Users, badge: "HR" },
+            { id: "workforce", label: "Workforce", icon: Users, badge: "HR" },
             { id: "reconcile", label: "Reconcile", icon: FileCheck2 },
             { id: "reports", label: "Reports", icon: ClipboardList },
             { id: "departments", label: "Departments", icon: Hash },
@@ -4972,6 +4974,7 @@ function AccountingModule({ ctx }) {
       {tab === "agents" && <_AgentBriefingPane ctx={ctx} role={ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role)} enrichReport={enrichReport} />}
       {tab === "rmengine" && <_RevenueEnginePane ctx={ctx} enrichReport={enrichReport} />}
       {tab === "laboropt" && <_LaborOptimizationPane ctx={ctx} enrichReport={enrichReport} />}
+      {tab === "workforce" && <_WorkforcePane ctx={ctx} />}
       {tab === "reconcile" && <ReconcilePane ctx={ctx} setTab={setTab} />}
       {tab === "reports" && <CustomReportsPane ctx={ctx} />}
       {tab === "departments" && <DepartmentsPane ctx={ctx} />}
