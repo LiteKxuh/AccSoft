@@ -7,7 +7,7 @@ import {
   TrendingUp, BedDouble, Home, ChevronRight, MoreHorizontal,
   Shield, UserCircle2, MapPin, Phone, Mail, Hash, Briefcase,
   LayoutDashboard, Coffee, FileCheck2, Paperclip, Receipt, FileSpreadsheet,
-  Cpu
+  Cpu, Activity
 } from "lucide-react";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -15,6 +15,9 @@ import {
 } from "recharts";
 import { extractAudit as _extractAudit, fileToBase64 as _fileToBase64, splitAuditBatch as _splitAuditBatch, parseAuditBatch as _parseAuditBatch } from "./src/lib/auditParser.js";
 import { useToast as _useToast } from "./src/lib/toast.jsx";
+import { confirmDialog as _confirm, promptDialog as _prompt, alertDialog as _alert } from "./src/lib/dialog.jsx";
+import { PaneErrorBoundary as _PaneErrorBoundary } from "./src/lib/PaneErrorBoundary.jsx";
+import { DiagnosticsPane as _DiagnosticsPane } from "./src/lib/DiagnosticsPane.jsx";
 import { commandBus as _commandBus } from "./src/lib/CommandPalette.jsx";
 import { forecast as _forecast } from "./src/lib/forecast.js";
 import { autoSeedBudgets as _autoSeedBudgets, actualsFor as _actualsFor, budgetTotal as _budgetTotal, pacing as _pacing, monthOf as _monthOf, emptyBudget as _emptyBudget } from "./src/lib/budget.js";
@@ -577,9 +580,10 @@ export default function HotelOps() {
       else if (cmd === "open:property" && payload) { setActiveProperty(payload); setView("dashboard"); }
       else if (cmd === "open:vendor" && payload) { setView("accounting"); /* AP modal flow */ }
       else if (cmd === "data:reset") {
-        if (confirm("Clear all local data and restore demo seed?")) {
-          (async () => { try { await window.storage.delete(STORAGE_KEY); } catch {}; window.location.reload(); })();
-        }
+        (async () => {
+          const ok = await _confirm({ title: "Reset to demo seed", message: "Clear all local data and restore demo seed?", danger: true, confirmLabel: "Reset" });
+          if (ok) { try { await window.storage.delete(STORAGE_KEY); } catch {}; window.location.reload(); }
+        })();
       }
       else if (cmd === "onboarding:open") setShowOnboarding(true);
     });
@@ -3622,8 +3626,9 @@ function TimeOffPane({ ctx }) {
           {allowReview && r.status === "pending" ? (
             <div className="flex justify-end gap-1.5">
               <button onClick={() => review(r.id, "approved")} className="text-xs px-2 py-1 rounded bg-emerald-700 text-white hover:bg-emerald-800">Approve</button>
-              <button onClick={() => {
-                const notes = prompt("Reason for denial (optional):");
+              <button onClick={async () => {
+                const notes = await _prompt({ title: "Deny PTO request", message: "Reason for denial (optional):", placeholder: "Optional notes" });
+                if (notes === null) return;
                 review(r.id, "denied", notes || null);
               }} className="text-xs px-2 py-1 rounded border border-stone-300 text-stone-700 hover:bg-stone-100">Deny</button>
             </div>
@@ -4927,6 +4932,7 @@ function AccountingModule({ ctx }) {
             { id: "reports", label: "Reports", icon: ClipboardList },
             { id: "departments", label: "Departments", icon: Hash },
             { id: "gl", label: "GL Mapping", icon: Hash },
+            { id: "diagnostics", label: "Diagnostics", icon: Activity, badge: "Sys" },
           ].map(t => {
             const active = tab === t.id;
             const Icon = t.icon;
@@ -4945,44 +4951,47 @@ function AccountingModule({ ctx }) {
         </div>
       </div>
 
-      {tab === "flash" && <FlashReportPane ctx={ctx} setTab={setTab} />}
-      {tab === "ingest" && <IngestPane ctx={ctx} setTab={setTab} />}
-      {tab === "budget" && <BudgetPane ctx={ctx} />}
-      {tab === "pnl" && <PnlPane ctx={ctx} />}
-      {tab === "balance-sheet" && <BalanceSheetPane ctx={ctx} />}
-      {tab === "cashflow" && <CashFlowPane ctx={ctx} />}
-      {tab === "trial-balance" && <TrialBalancePane ctx={ctx} />}
-      {tab === "journal" && <JournalEntriesPane ctx={ctx} />}
-      {tab === "bankrec" && <BankRecPane ctx={ctx} />}
-      {tab === "close" && <PeriodClosePane ctx={ctx} setTab={setTab} />}
-      {tab === "ap" && <ApPane ctx={ctx} />}
-      {tab === "ar" && <ArAgingPane ctx={ctx} />}
-      {tab === "tax" && <TaxCalendarPane ctx={ctx} />}
-      {tab === "yearend" && <YearEndFormsPane ctx={ctx} />}
-      {tab === "labor" && <LaborAnalyticsPane ctx={ctx} />}
-      {tab === "compset" && <CompsetPane ctx={ctx} />}
-      {tab === "portfolio" && <PortfolioPane ctx={ctx} setTab={setTab} />}
-      {tab === "trends" && <TrendsPane ctx={ctx} />}
-      {tab === "forecast" && <ForecastPane ctx={ctx} />}
-      {tab === "pace" && <_PacePane ctx={ctx} enrichReport={enrichReport} />}
-      {tab === "reportshub" && <_ReportsHub ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
-      {tab === "inbox" && <_ApprovalInboxPane ctx={ctx} role={ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role)} onUpdate={(patch) => ctx.update(patch)} />}
-      {tab === "forensics" && <_ForensicsPane ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
-      {tab === "audit" && <_AuditTrailPane ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
-      {tab === "owner" && <_OwnerPortalPane ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
-      {tab === "state" && <_StatePane ctx={ctx} enrichReport={enrichReport} />}
-      {tab === "automation" && <_AutomationPane ctx={ctx} enrichReport={enrichReport} />}
-      {tab === "risk" && <_ForensicsRiskPane ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
-      {tab === "command" && <_CommandCenterPane ctx={ctx} enrichReport={enrichReport} />}
-      {tab === "execops" && <_ExecutiveOpsCenter ctx={ctx} enrichReport={enrichReport} />}
-      {tab === "agents" && <_AgentBriefingPane ctx={ctx} role={ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role)} enrichReport={enrichReport} />}
-      {tab === "rmengine" && <_RevenueEnginePane ctx={ctx} enrichReport={enrichReport} />}
-      {tab === "laboropt" && <_LaborOptimizationPane ctx={ctx} enrichReport={enrichReport} />}
-      {tab === "workforce" && <_WorkforcePane ctx={ctx} />}
-      {tab === "reconcile" && <ReconcilePane ctx={ctx} setTab={setTab} />}
-      {tab === "reports" && <CustomReportsPane ctx={ctx} />}
-      {tab === "departments" && <DepartmentsPane ctx={ctx} />}
-      {tab === "gl" && <GLMappingPane ctx={ctx} />}
+      <_PaneErrorBoundary name={tab} onResetKey={tab}>
+        {tab === "flash" && <FlashReportPane ctx={ctx} setTab={setTab} />}
+        {tab === "ingest" && <IngestPane ctx={ctx} setTab={setTab} />}
+        {tab === "budget" && <BudgetPane ctx={ctx} />}
+        {tab === "pnl" && <PnlPane ctx={ctx} />}
+        {tab === "balance-sheet" && <BalanceSheetPane ctx={ctx} />}
+        {tab === "cashflow" && <CashFlowPane ctx={ctx} />}
+        {tab === "trial-balance" && <TrialBalancePane ctx={ctx} />}
+        {tab === "journal" && <JournalEntriesPane ctx={ctx} />}
+        {tab === "bankrec" && <BankRecPane ctx={ctx} />}
+        {tab === "close" && <PeriodClosePane ctx={ctx} setTab={setTab} />}
+        {tab === "ap" && <ApPane ctx={ctx} />}
+        {tab === "ar" && <ArAgingPane ctx={ctx} />}
+        {tab === "tax" && <TaxCalendarPane ctx={ctx} />}
+        {tab === "yearend" && <YearEndFormsPane ctx={ctx} />}
+        {tab === "labor" && <LaborAnalyticsPane ctx={ctx} />}
+        {tab === "compset" && <CompsetPane ctx={ctx} />}
+        {tab === "portfolio" && <PortfolioPane ctx={ctx} setTab={setTab} />}
+        {tab === "trends" && <TrendsPane ctx={ctx} />}
+        {tab === "forecast" && <ForecastPane ctx={ctx} />}
+        {tab === "pace" && <_PacePane ctx={ctx} enrichReport={enrichReport} />}
+        {tab === "reportshub" && <_ReportsHub ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
+        {tab === "inbox" && <_ApprovalInboxPane ctx={ctx} role={ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role)} onUpdate={(patch) => ctx.update(patch)} />}
+        {tab === "forensics" && <_ForensicsPane ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
+        {tab === "audit" && <_AuditTrailPane ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
+        {tab === "owner" && <_OwnerPortalPane ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
+        {tab === "state" && <_StatePane ctx={ctx} enrichReport={enrichReport} />}
+        {tab === "automation" && <_AutomationPane ctx={ctx} enrichReport={enrichReport} />}
+        {tab === "risk" && <_ForensicsRiskPane ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
+        {tab === "command" && <_CommandCenterPane ctx={ctx} enrichReport={enrichReport} />}
+        {tab === "execops" && <_ExecutiveOpsCenter ctx={ctx} enrichReport={enrichReport} />}
+        {tab === "agents" && <_AgentBriefingPane ctx={ctx} role={ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role)} enrichReport={enrichReport} />}
+        {tab === "rmengine" && <_RevenueEnginePane ctx={ctx} enrichReport={enrichReport} />}
+        {tab === "laboropt" && <_LaborOptimizationPane ctx={ctx} enrichReport={enrichReport} />}
+        {tab === "workforce" && <_WorkforcePane ctx={ctx} />}
+        {tab === "reconcile" && <ReconcilePane ctx={ctx} setTab={setTab} />}
+        {tab === "reports" && <CustomReportsPane ctx={ctx} />}
+        {tab === "departments" && <DepartmentsPane ctx={ctx} />}
+        {tab === "gl" && <GLMappingPane ctx={ctx} />}
+        {tab === "diagnostics" && <_DiagnosticsPane />}
+      </_PaneErrorBoundary>
     </div>
   );
 }
@@ -6205,7 +6214,7 @@ function UploadDropZone({ file, setFile, fileInput }) {
   const [drag, setDrag] = useState(false);
   const handleFile = (f) => {
     if (!f) return;
-    if (f.size > 8 * 1024 * 1024) { alert("File too large (max 8MB)"); return; }
+    if (f.size > 8 * 1024 * 1024) { _alert({ title: "File too large", message: "Maximum size is 8MB. Reduce the file and try again.", tone: "warn" }); return; }
     setFile({ raw: f, name: f.name, size: f.size });
   };
   return (
@@ -7510,12 +7519,12 @@ function computeW2Summary(employee, runs, year) {
 // trigger a browser download. Uses the active property as employer; user is
 // prompted for missing TIN/EIN. The file is *generated*, not transmitted —
 // the user uploads it to the SSA BSO portal or the IRS FIRE system.
-function generateEFile(ctx, formType, year) {
+async function generateEFile(ctx, formType, year) {
   const { state, currentUser, activeProperty, toast } = ctx;
   const property = state.properties.find(p => p.id === activeProperty) || state.properties[0];
   if (!property) { toast?.push("No active property", { tone: "error" }); return; }
 
-  const ein = property.ein || prompt(`Enter EIN for ${property.name} (e.g. 12-3456789):`);
+  const ein = property.ein || await _prompt({ title: "EIN required", message: `Enter EIN for ${property.name}`, placeholder: "12-3456789" });
   if (!ein || !/\d{2}-?\d{7}/.test(ein)) { toast?.push("Valid EIN required to generate the file", { tone: "error" }); return; }
 
   const submitter = {
@@ -7556,7 +7565,8 @@ function generateEFile(ctx, formType, year) {
       downloadText(out.content, out.filename);
       toast?.push(`Generated ${out.filename} — ${w2s.length} W-2s, ${fmtMoney(out.summary.wages)} total wages`, { tone: "success", duration: 6000 });
     } else {
-      const transmitter = { ...submitter, tin: ein, tcc: prompt("Enter your IRS Transmitter Control Code (TCC) — apply at FIRE.IRS.gov if you don't have one:") || "" };
+      const tcc = await _prompt({ title: "IRS Transmitter Control Code", message: "Apply at FIRE.IRS.gov if you don't have one.", placeholder: "TCC" });
+      const transmitter = { ...submitter, tin: ein, tcc: tcc || "" };
       if (!transmitter.tcc) { toast?.push("TCC required for FIRE submission", { tone: "error" }); return; }
       const payer = { ...submitter, tin: ein };
       const payees = state.contractors
@@ -9345,15 +9355,18 @@ function ReconcilePane({ ctx, setTab }) {
   ];
   const allClear = closeChecks.every(c => c.ok);
 
-  const closePeriod = () => {
-    if (!confirm(`Close ${closeMonth} for ${propsAll.find(p => p.id === closeProp)?.name}? Reports for the period will be locked.`)) return;
+  const closePeriod = async () => {
+    const propName = propsAll.find(p => p.id === closeProp)?.name;
+    const ok = await _confirm({ title: "Close period", message: `Close ${closeMonth} for ${propName}? Reports for the period will be locked.`, confirmLabel: "Close", danger: true });
+    if (!ok) return;
     const entry = { propertyId: closeProp, month: closeMonth, closedAt: new Date().toISOString(), closedBy: currentUser.id };
     update({ closedPeriods: [...(state.closedPeriods || []), entry] });
     pushActivity(ctx, "period.close", { propertyId: closeProp, month: closeMonth });
     toast?.push(`Period ${closeMonth} closed`, { tone: "success" });
   };
-  const reopenPeriod = () => {
-    if (!confirm(`Re-open ${closeMonth}? Reports will become editable again.`)) return;
+  const reopenPeriod = async () => {
+    const ok = await _confirm({ title: "Re-open period", message: `Re-open ${closeMonth}? Reports will become editable again.`, confirmLabel: "Re-open", tone: "warn" });
+    if (!ok) return;
     update({ closedPeriods: (state.closedPeriods || []).filter(c => !(c.propertyId === closeProp && c.month === closeMonth)) });
     pushActivity(ctx, "period.reopen", { propertyId: closeProp, month: closeMonth });
     toast?.push(`Period ${closeMonth} re-opened`, { tone: "warn" });
@@ -10521,13 +10534,14 @@ function JournalEntriesPane({ ctx }) {
     pushActivity(ctx, "journal.approve", { id });
     toast?.push?.("Journal entry approved", { tone: "success" });
   };
-  const rejectEntry = (id) => {
-    const reason = window.prompt("Reason for rejecting?") || "";
+  const rejectEntry = async (id) => {
+    const reason = await _prompt({ title: "Reject journal entry", message: "Reason for rejecting?", placeholder: "Optional reason" });
+    if (reason === null) return;
     const next = (state.journalEntries || []).map(e =>
-      e.id === id ? { ...e, approvalState: "rejected", rejectedBy: currentUser.id, rejectedAt: new Date().toISOString(), rejectReason: reason } : e
+      e.id === id ? { ...e, approvalState: "rejected", rejectedBy: currentUser.id, rejectedAt: new Date().toISOString(), rejectReason: reason || "" } : e
     );
     update({ journalEntries: next });
-    pushActivity(ctx, "journal.reject", { id, reason });
+    pushActivity(ctx, "journal.reject", { id, reason: reason || "" });
     toast?.push?.("Journal entry rejected", { tone: "warn" });
   };
 
@@ -10807,7 +10821,7 @@ function AttachmentsPanel({ attachments = [], onChange, currentUser, readOnly = 
   const handleFile = async (file) => {
     if (!file) return;
     if (file.size > 6 * 1024 * 1024) {
-      alert("Files must be under 6 MB. Larger files will become a cloud-storage feature in a future release.");
+      _alert({ title: "File too large", message: "Attachments must be under 6 MB. Larger files will become a cloud-storage feature in a future release.", tone: "warn" });
       return;
     }
     const dataUrl = await new Promise((resolve, reject) => {
@@ -11936,11 +11950,12 @@ function PeriodClosePane({ ctx, setTab }) {
   const overall = result.overall;
   const canClose = canRunPayroll && !isAlreadyClosed && (overall === "pass" || overall === "warn");
 
-  const closePeriod = (force = false) => {
+  const closePeriod = async (force = false) => {
     if (!canClose && !force) return;
     if (!canRunPayroll) { toast?.push?.("Only managers can close periods", { tone: "error" }); return; }
     if (overall === "fail" && !force) {
-      if (!window.confirm(`Some checks failed. Close anyway?`)) return;
+      const ok = await _confirm({ title: "Close with failed checks?", message: "Some pre-close checks failed. Close anyway?", confirmLabel: "Close anyway", danger: true });
+      if (!ok) return;
     }
     const reversals = _reversingEntriesFor(state, propId, month, currentUser.id);
     const next = {
@@ -11957,9 +11972,10 @@ function PeriodClosePane({ ctx, setTab }) {
     toast?.push?.(reversals.length ? `Period ${month} closed · ${reversals.length} accrual${reversals.length === 1 ? "" : "s"} reversed in next period` : `Period ${month} closed`, { tone: "success", duration: 5000 });
   };
 
-  const reopenPeriod = () => {
+  const reopenPeriod = async () => {
     if (!canRunPayroll) return;
-    if (!window.confirm(`Re-open period ${month}? This will allow edits to all journals dated in this month.`)) return;
+    const ok = await _confirm({ title: "Re-open period", message: `Re-open period ${month}? This will allow edits to all journals dated in this month.`, confirmLabel: "Re-open", tone: "warn" });
+    if (!ok) return;
     update({ closedPeriods: (state.closedPeriods || []).filter(c => !(c.month === month && c.propertyId === propId)) });
     pushActivity(ctx, "period.reopen", { month, propertyId: propId });
     toast?.push?.(`Period ${month} re-opened`, { tone: "warn" });
@@ -12830,7 +12846,8 @@ function BackupRestoreCard({ ctx }) {
       const txt = await file.text();
       const parsed = JSON.parse(txt);
       if (parsed.schema !== "hotelops.backup.v1" || !parsed.state) throw new Error("Not a HotelOps backup");
-      if (!confirm(`Restore backup from ${parsed.exportedAt || "unknown date"}? This will overwrite all current local data.`)) return;
+      const ok = await _confirm({ title: "Restore backup", message: `Restore backup from ${parsed.exportedAt || "unknown date"}? This will overwrite all current local data.`, confirmLabel: "Restore", danger: true });
+      if (!ok) return;
       update(parsed.state);
       toast?.push("Backup restored", { tone: "success" });
     } catch (e) {
@@ -13068,7 +13085,8 @@ function SettingsModule({ ctx }) {
                     size="sm"
                     className="mt-3"
                     onClick={async () => {
-                      if (!confirm("Clear all data and restore demo seed?")) return;
+                      const ok = await _confirm({ title: "Reset to demo seed", message: "Clear all data and restore demo seed? This cannot be undone.", confirmLabel: "Reset", danger: true });
+                      if (!ok) return;
                       try { await window.storage.delete(STORAGE_KEY); } catch (e) {}
                       window.location.reload();
                     }}
@@ -13318,8 +13336,9 @@ function AuditLogPane({ ctx }) {
   const ENTITY_TYPES = ["all", "properties", "employees", "shifts", "schedule", "reports", "budgets", "vendors", "invoices", "payrollRuns", "contractors", "contractorPayments", "journalEntries", "closedPeriods", "bankRecs"];
   const ACTIONS = ["all", "create", "update", "delete"];
 
-  const handleClear = () => {
-    if (!confirm("Clear the entire audit log? This cannot be undone.")) return;
+  const handleClear = async () => {
+    const ok = await _confirm({ title: "Clear audit log", message: "Clear the entire audit log? This cannot be undone.", confirmLabel: "Clear", danger: true });
+    if (!ok) return;
     _clearAuditLog();
     setRefreshTick(t => t + 1);
     toast?.push("Audit log cleared", { tone: "info" });

@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { CheckCircle2, X, ShieldCheck, Receipt, ClipboardList } from "lucide-react";
 import { inboxFor, approveJE, rejectJE, approveInvoice } from "./approvalInbox.js";
+import { promptDialog } from "./dialog.jsx";
 
 function fmtMoney(n) {
   const v = Number(n) || 0;
@@ -20,9 +21,10 @@ export function ApprovalInboxPane({ ctx, role, onUpdate }) {
     toast?.push?.("Journal entry approved", { tone: "success" });
   };
 
-  const handleRejectJE = (id) => {
-    const reason = window.prompt("Reason for rejecting?") || "Rejected";
-    const r = rejectJE(state, id, currentUser, role, reason);
+  const handleRejectJE = async (id) => {
+    const reason = await promptDialog({ title: "Reject journal entry", message: "Reason for rejecting?", placeholder: "Optional reason" });
+    if (reason === null) return; // user cancelled
+    const r = rejectJE(state, id, currentUser, role, reason || "Rejected");
     if (!r.ok) { toast?.push?.(r.reason, { tone: "error" }); return; }
     onUpdate(r.update);
     toast?.push?.("Journal entry rejected", { tone: "warn" });

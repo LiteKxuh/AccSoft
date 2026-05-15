@@ -4,7 +4,11 @@ import "./index.css";
 import "./lib/storage.js"; // installs window.storage shim
 import HotelOps from "../HotelOps.jsx";
 import { ToastProvider } from "./lib/toast.jsx";
+import { DialogProvider } from "./lib/dialog.jsx";
+import { installDiagnostics } from "./lib/diagnostics.js";
 import { CommandPalette } from "./lib/CommandPalette.jsx";
+
+installDiagnostics();
 
 function paintFatal(title, detail) {
   const el = document.getElementById("root") || document.body;
@@ -40,8 +44,10 @@ try {
   ReactDOM.createRoot(rootEl).render(
     <StartupBoundary>
       <ToastProvider>
-        <HotelOps />
-        <CommandPalette />
+        <DialogProvider>
+          <HotelOps />
+          <CommandPalette />
+        </DialogProvider>
       </ToastProvider>
     </StartupBoundary>
   );

@@ -1,7 +1,7 @@
 {
   "name": "hotelops",
   "private": false,
-  "version": "1.20.0",
+  "version": "1.21.0",
   "type": "module",
   "main": "electron/main.cjs",
   "description": "HotelOps — premium hotel accounting, daily flash, payroll, scheduling, and night-audit ingestion suite.",
