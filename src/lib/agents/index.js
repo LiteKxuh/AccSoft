@@ -16,6 +16,8 @@ import { OWNERSHIP_BRIEFING_AGENT } from "./ownershipBriefingAgent.js";
 import { FORECAST_ANALYST_AGENT } from "./forecastAnalystAgent.js";
 import { AP_INTELLIGENCE_AGENT } from "./apIntelligenceAgent.js";
 import { GUEST_EXPERIENCE_AGENT } from "./guestExperienceAgent.js";
+import { REVENUE_DIRECTOR_AGENT } from "./revenueDirectorAgent.js";
+import { OPERATIONS_DIRECTOR_AGENT } from "./operationsDirectorAgent.js";
 
 export const AGENTS = [
   GM_BRIEFING_AGENT,
@@ -34,6 +36,8 @@ export const AGENTS = [
   OWNERSHIP_BRIEFING_AGENT,
   FORECAST_ANALYST_AGENT,
   GUEST_EXPERIENCE_AGENT,
+  REVENUE_DIRECTOR_AGENT,
+  OPERATIONS_DIRECTOR_AGENT,
 ];
 
 export function agentById(id) {

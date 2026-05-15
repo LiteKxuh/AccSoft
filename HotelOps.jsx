@@ -6,7 +6,8 @@ import {
   ArrowLeft, ArrowRight, X, Save, Play, Pause, ClipboardList,
   TrendingUp, BedDouble, Home, ChevronRight, MoreHorizontal,
   Shield, UserCircle2, MapPin, Phone, Mail, Hash, Briefcase,
-  LayoutDashboard, Coffee, FileCheck2, Paperclip, Receipt, FileSpreadsheet
+  LayoutDashboard, Coffee, FileCheck2, Paperclip, Receipt, FileSpreadsheet,
+  Cpu
 } from "lucide-react";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -124,6 +125,7 @@ import { StatePane as _StatePane } from "./src/lib/StatePane.jsx";
 import { AutomationPane as _AutomationPane } from "./src/lib/AutomationPane.jsx";
 import { ForensicsRiskPane as _ForensicsRiskPane } from "./src/lib/ForensicsRiskPane.jsx";
 import { CommandCenterPane as _CommandCenterPane } from "./src/lib/CommandCenterPane.jsx";
+import { ExecutiveOpsCenter as _ExecutiveOpsCenter } from "./src/lib/ExecutiveOpsCenter.jsx";
 import { AgentBriefingPane as _AgentBriefingPane } from "./src/lib/AgentBriefingPane.jsx";
 import { RevenueEnginePane as _RevenueEnginePane } from "./src/lib/RevenueEnginePane.jsx";
 import { LaborOptimizationPane as _LaborOptimizationPane } from "./src/lib/LaborOptimizationPane.jsx";
@@ -4916,6 +4918,7 @@ function AccountingModule({ ctx }) {
             { id: "automation", label: "Automation", icon: Play, badge: "AI" },
             { id: "risk", label: "Forensics Risk", icon: Shield, badge: "AI" },
             { id: "command", label: "Command Center", icon: Building2, badge: "Exec" },
+            { id: "execops", label: "Executive Ops", icon: Cpu, badge: "Exec" },
             { id: "agents", label: "AI Agents", icon: Briefcase, badge: "AI" },
             { id: "rmengine", label: "Revenue Engine", icon: TrendingUp, badge: "RM" },
             { id: "laboropt", label: "Labor Optimization", icon: Users, badge: "HR" },
@@ -4971,6 +4974,7 @@ function AccountingModule({ ctx }) {
       {tab === "automation" && <_AutomationPane ctx={ctx} enrichReport={enrichReport} />}
       {tab === "risk" && <_ForensicsRiskPane ctx={ctx} can={(action, opts) => _rbacCan(ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role), action, opts)} />}
       {tab === "command" && <_CommandCenterPane ctx={ctx} enrichReport={enrichReport} />}
+      {tab === "execops" && <_ExecutiveOpsCenter ctx={ctx} enrichReport={enrichReport} />}
       {tab === "agents" && <_AgentBriefingPane ctx={ctx} role={ctx.currentUser?.rbacRole || mapLegacyRole(ctx.currentUser?.role)} enrichReport={enrichReport} />}
       {tab === "rmengine" && <_RevenueEnginePane ctx={ctx} enrichReport={enrichReport} />}
       {tab === "laboropt" && <_LaborOptimizationPane ctx={ctx} enrichReport={enrichReport} />}

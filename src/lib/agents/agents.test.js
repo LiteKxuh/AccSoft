@@ -11,6 +11,8 @@ import { OWNERSHIP_BRIEFING_AGENT } from "./ownershipBriefingAgent.js";
 import { FORECAST_ANALYST_AGENT } from "./forecastAnalystAgent.js";
 import { AP_INTELLIGENCE_AGENT } from "./apIntelligenceAgent.js";
 import { GUEST_EXPERIENCE_AGENT } from "./guestExperienceAgent.js";
+import { REVENUE_DIRECTOR_AGENT } from "./revenueDirectorAgent.js";
+import { OPERATIONS_DIRECTOR_AGENT } from "./operationsDirectorAgent.js";
 import { AGENTS, agentById } from "./index.js";
 
 const cleanReport = (date, propertyId = "p1") => ({
@@ -227,6 +229,49 @@ describe("AP Intelligence Agent — deterministic", () => {
     const r = await runAgent({ agent: AP_INTELLIGENCE_AGENT, briefing, ctx: { role: "controller" } });
     expect(r.deterministic.findings.some(f => /duplicate/.test(f))).toBe(true);
     expect(r.deterministic.findings.some(f => /120 days/.test(f))).toBe(true);
+  });
+});
+
+describe("Revenue Director Agent — deterministic", () => {
+  it("produces a local fallback with weeklyPriorities", async () => {
+    const reports = [];
+    for (let i = 0; i < 60; i++) {
+      const d = new Date(Date.UTC(2026, 0, 1 + i));
+      const dow = d.getUTCDay();
+      const sold = (dow === 5 || dow === 6) ? 95 : (dow === 0 || dow === 1) ? 35 : 70;
+      reports.push({
+        date: d.toISOString().slice(0, 10), propertyId: "p1",
+        roomsAvailable: 100, roomsSold: sold, adr: 120, totalRevenue: sold * 120,
+        breakdown: { revenue: { rooms: sold * 120 }, segments: { ota: { revenue: 50000, roomNights: 400 } } },
+      });
+    }
+    const state = { reports, properties: [{ id: "p1", tier: "midscale" }] };
+    const briefing = REVENUE_DIRECTOR_AGENT.buildBriefing({ state, propertyId: "p1", asOf: "2026-02-28", capacity: 100 });
+    const r = await runAgent({ agent: REVENUE_DIRECTOR_AGENT, briefing, ctx: { role: "revenue-manager" } });
+    expect(r.status).toBe("local");
+    expect(r.narrative).toBeTruthy();
+  });
+});
+
+describe("Operations Director Agent — deterministic", () => {
+  it("produces orchestration for staffing stress", async () => {
+    const reports = seedReports(14, "p1");
+    const state = {
+      reports,
+      properties: [{ id: "p1" }],
+      // High labor pct to trigger staffing stress
+      shifts: Array.from({ length: 30 }, (_, i) => ({
+        id: `s${i}`, propertyId: "p1", employeeId: "e1",
+        clockIn: `${reports[i % reports.length].date}T08:00:00Z`,
+        clockOut: `${reports[i % reports.length].date}T22:00:00Z`,
+        payRate: 50,
+      })),
+      employees: [{ id: "e1", name: "A", title: "Manager", hourlyRate: 50 }],
+    };
+    const briefing = OPERATIONS_DIRECTOR_AGENT.buildBriefing({ state, propertyId: "p1", asOf: "2026-05-14" });
+    const r = await runAgent({ agent: OPERATIONS_DIRECTOR_AGENT, briefing, ctx: { role: "gm" } });
+    expect(r.status).toBe("local");
+    expect(r.narrative).toBeTruthy();
   });
 });
 
